@@ -7,6 +7,10 @@
 *.dll
 *.zip
 
+# Local diagnostic run logs
+realrun.log
+*.run.log
+
 # User-specific files
 *.rsuser
 *.suo

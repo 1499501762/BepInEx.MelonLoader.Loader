@@ -66,20 +66,27 @@
 | 配置 | BepInEx ConfigFile | `LoaderConfig`（BaseDirectory 指向 MLLoader） |
 | 原生宿主 | 无（自包含） | 依赖 BootstrapInterop → 已用托管实现替换 |
 
-## 剩余工作（需要真实游戏运行时验证）
+## 剩余工作（运行时验证状态）
 
-> ⚠️ 编译与打包已完成，但**运行时行为未经真实游戏验证**，以下为高风险点：
+### ✅ net6.0 (IL2CPP) 已通过真实游戏验证（2026-08-09，v2.2.1）
 
-1. **net35 (UnityMono) 运行时**：
-   - `SupportModule.Setup()` 需加载 Dependencies/SupportModules/Mono.dll（原生支持模块），在 BepInEx 环境下的兼容性未验证
-   - `MelonFolderHandler` 扫描、Harmony patch、mod 加载流程需实际游戏测试
-2. **net6.0 (IL2CPP) 运行时**：
-   - 0.7.3 的 net6 分支依赖 Il2CppInterop（1.5.1），与 BepInEx 自身 Il2Cpp 集成可能有冲突/重叠
-   - `Il2CppAssemblyGenerator`（PreSetup）在 BepInEx 环境下可能重复生成或冲突
-   - `RegisterTypeInIl2Cpp` / `RegisterTypeInIl2CppWithInterfaces` 与 BepInEx 的注册流程交互未验证
-3. **原生钩子**：`NativeHookAttach/Detach` 目前为 no-op，依赖原生钩子的 mod 将无法工作
-4. **bHaptics**：`bHapticsManager.Connect` 在初始化时调用，需游戏环境验证
-5. **退出流程**：`Core.Quit()` 相关的干净退出未验证
+游戏：Iron Nest: Heavy Turret Simulator（Il2Cpp，Unity 6000.3.9f1，BepInEx 6.0.0-be.785）
+
+二次运行（`realrun.log`，v2.2.1）确认：
+- ✅ `InternalsVisibleTo` 修复生效，`FieldAccessException` / `MethodAccessException` 完全消失
+- ✅ SupportModule（Il2Cpp.dll）加载成功，SceneHandler 场景事件正常（无 override 失败）
+- ✅ 共存 BepInEx 插件的 Harmony 补丁正常：IronNest Coop 加载成功，**65 个方法补丁成功**
+- ✅ 二次启动时 Il2CppAssemblyGenerator 命中缓存（"Assembly is up to date. No Generation Needed."）
+- ✅ 游戏正常运行（Mods/Plugins 加载机制正常，当前 0 个 ML mod）
+
+### ⚠️ net35 (UnityMono) 尚未验证
+- `SupportModule.Setup()`（Mono.dll）、`MelonFolderHandler`、Harmony patch 的 Mono 路径待 Unity Mono 游戏测试
+- 理论风险较低（net35 是 0.7.3 的成熟路径），但未实测
+
+### 其他已知限制
+- **原生钩子**：`NativeHookAttach/Detach` 目前为 no-op，依赖原生钩子的 ML mod 将无法工作
+- **bHaptics**：`bHapticsManager.Connect` 初始化时调用，未实测
+- **退出流程**：`Core.Quit()` 相关的干净退出未验证
 
 ## 参考源码位置
 
