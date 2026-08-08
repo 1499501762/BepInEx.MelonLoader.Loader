@@ -114,9 +114,10 @@
 - 理论风险较低（net35 是 0.7.3 的成熟路径），驱动逻辑与 IL2CPP 版一致，但未实测
 
 ### 其他已知限制
-- **原生钩子**：`NativeHookAttach/Detach` 目前为 no-op，依赖原生钩子的 ML mod 将无法工作（游戏循环事件已由宿主插件驱动，绝大多数 mod 不受影响）
-- **bHaptics**：`bHapticsManager.Connect` 初始化时调用，未实测
-- **退出流程**：`Core.Quit()` 相关的干净退出未验证
+- **退出流程（v2.3.1 已修复）**：SupportModule 的 Quit 钩子在 BepInEx 托管下不触发 → mod 收不到 `OnApplicationQuit`/`OnApplicationDefiniteQuit`，`Core.Quit()` 清理不执行。已在宿主驱动的 `OnApplicationQuit()` 中调用 `BepInExHost.InvokeOnApplicationQuit()` + `InvokeOnApplicationDefiniteQuit()`（→ `Core.Quit()` 保存偏好/解绑 Harmony/断开 bHaptics）。
+- **原生钩子（保持 no-op）**：`NativeHookAttach/Detach` 仍为 no-op。核心里唯一内部使用者是 `Il2CppICallInjector`（hook `il2cpp_resolve_icall`，可选 fix，已 try/catch 静默失败，游戏不受影响）；公共 API `MelonUtils.NativeHookAttach` 仅极少数 mod 使用。实现真实 detour（MinHook 或自写 x64 detour）风险高收益低，遇到确实需要的 mod 再评估。
+- **bHaptics（无问题）**：`bHapticsManager.Connect` 是 bHapticsLib 的后台连接，无设备时优雅失败，游戏运行正常；仅未接设备实测。
+- **net35 (UnityMono)**：驱动逻辑与 IL2CPP 版一致，未实测。
 
 ## 参考源码位置
 

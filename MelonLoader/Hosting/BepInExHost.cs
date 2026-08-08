@@ -124,6 +124,23 @@ namespace MelonLoader.Hosting
         public static void InvokeSceneWasUnloaded(int buildIndex, string sceneName)
             => MelonEvents.OnSceneWasUnloaded.Invoke(buildIndex, sceneName);
 
+        /// <summary>
+        /// Fired when the application is about to quit (the SupportModule's quit hook does not
+        /// fire under BepInEx hosting). Drives <see cref="MelonEvents.OnApplicationQuit"/>.
+        /// </summary>
+        public static void InvokeOnApplicationQuit()
+            => MelonEvents.OnApplicationQuit.Invoke();
+
+        /// <summary>
+        /// Fires <see cref="MelonEvents.OnApplicationDefiniteQuit"/> and runs MelonLoader's
+        /// clean shutdown (<see cref="Core.Quit"/>).
+        /// </summary>
+        public static void InvokeOnApplicationDefiniteQuit()
+        {
+            MelonEvents.OnApplicationDefiniteQuit.Invoke();
+            Core.Quit();
+        }
+
         // Native hooks are not required when hosted by BepInEx (MonoMod / BepInEx handles hooking).
         private static unsafe void NativeHookAttach(nint* target, nint detour) { }
         private static unsafe void NativeHookDetach(nint* target, nint detour) { }

@@ -77,6 +77,21 @@ namespace BepInEx.MelonLoader.Loader.IL2CPP
         private void LateUpdate() => BepInExHost.InvokeLateUpdate();
         private void OnGUI() => BepInExHost.InvokeOnGUI();
 
+        private void OnApplicationQuit()
+        {
+            // The SupportModule's quit hook doesn't fire under BepInEx hosting, so deliver
+            // the quit events and run MelonLoader's clean shutdown ourselves.
+            try
+            {
+                BepInExHost.InvokeOnApplicationQuit();
+                BepInExHost.InvokeOnApplicationDefiniteQuit();
+            }
+            catch
+            {
+                // Never let quit handling block application shutdown.
+            }
+        }
+
         private void DetectSceneChanges()
         {
             try
