@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using MelonLoader.Preferences;
+using MelonLoader.Utils;
 using Tomlet.Exceptions;
 
 namespace MelonLoader
@@ -32,8 +33,8 @@ namespace MelonLoader
         internal static Preferences.IO.File DefaultFile = null;
 
         static MelonPreferences() => DefaultFile = new Preferences.IO.File(
-            Path.Combine(MelonUtils.UserDataDirectory, "MelonPreferences.cfg"),
-            Path.Combine(MelonUtils.UserDataDirectory, "modprefs.ini"));
+            Path.Combine(MelonEnvironment.UserDataDirectory, "MelonPreferences.cfg"),
+            Path.Combine(MelonEnvironment.UserDataDirectory, "modprefs.ini"));
 
         public static void Load()
         {
@@ -103,10 +104,7 @@ namespace MelonLoader
                         category.LoadDefaults();
                         continue;
                     }
-
                     category.Load(table);
-
-                    OnPreferencesLoaded.Invoke(currentFile.FilePath);
                 }
             }
 
@@ -160,9 +158,7 @@ namespace MelonLoader
                     {
                         MelonLogger.Error($"Error while Saving Preferences to {file.FilePath}: {ex}");
                         file.WasError = true;
-                        continue;
                     }
-                    OnPreferencesSaved.Invoke(file.FilePath);
                 }
             }
 
@@ -352,9 +348,7 @@ namespace MelonLoader
                 }
 
             if (printmsg)
-                MelonLogger.Msg($"MelonPreferences Loaded from {file.FilePath}");
-
-            OnPreferencesLoaded.Invoke(file.FilePath);
+                MelonLogger.MsgDirect($"MelonPreferences Loaded from {file.FilePath}");
         }
 
         public static void RemoveCategoryFromFile(string filePath, string categoryName)

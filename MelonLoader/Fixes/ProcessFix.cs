@@ -1,6 +1,6 @@
-﻿using System;
+﻿#if WINDOWS
+using System;
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using HarmonyLib;
@@ -23,7 +23,7 @@ namespace MelonLoader.Fixes
 				Core.HarmonyInstance.Patch(AccessTools.PropertyGetter(processType, "MainWindowHandle"), AccessTools.Method(processFixType, "get_MainWindowHandle").ToNewHarmonyMethod());
 				Core.HarmonyInstance.Patch(AccessTools.PropertyGetter(processType, "MainWindowTitle"), AccessTools.Method(processFixType, "get_MainWindowTitle").ToNewHarmonyMethod());
 			}
-			catch (Exception ex) { MelonLogger.Warning($"ProcessFix Exception: {ex}"); }
+			catch (Exception ex) { MelonLogger.Warning(ex); }
 		}
 
 		// Taken and Modified from .NET Framework's System.dll
@@ -102,3 +102,4 @@ namespace MelonLoader.Fixes
 		}
     }
 }
+#endif

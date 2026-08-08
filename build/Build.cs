@@ -20,7 +20,7 @@ class Build : NukeBuild
 {
 	public static int Main () => Execute<Build>(x => x.Compile);
 
-    public const string MLVersionName = "v0.5.7";
+    public const string MLVersionName = "v0.7.3";
     private const string ProjectName = "BepInEx.MelonLoader.Loader";
 
     private AbsolutePath OutputDir => RootDirectory / "Output";
@@ -38,7 +38,7 @@ class Build : NukeBuild
 
 		    await using var downloadStream =
 			    await httpClient.GetStreamAsync(
-				    "https://github.com/LavaGang/MelonLoader/releases/download/v0.5.7/MelonLoader.x64.zip");
+				    "https://github.com/LavaGang/MelonLoader/releases/download/v0.7.3/MelonLoader.x64.zip");
 
 		    await downloadStream.CopyToAsync(fileStream);
 			fileStream.Close();
@@ -85,7 +85,7 @@ class Build : NukeBuild
 		    stagingBepInExPath,
 		    DirectoryExistsPolicy.Merge);
 
-	    stagingBepInExPath.GlobFiles("*.pdb", "Mono*.dll", "*Harmony.dll").DeleteFiles();
+	    stagingBepInExPath.GlobFiles("*.pdb", "*Harmony.dll").DeleteFiles();
 
 	    var stagingMLDependencies = stagingMLPath / "MelonLoader" / "Dependencies";
 
@@ -97,18 +97,22 @@ class Build : NukeBuild
 		{
 			(stagingMLDependencies / "Il2CppAssemblyGenerator").DeleteDirectory();
 			(stagingMLDependencies / "SupportModules" / "Il2Cpp.dll").DeleteFile();
-			(stagingMLDependencies / "CompatibilityLayers" / "Il2CppUnityTls.dll").DeleteFile();
+			(stagingMLDependencies / "SupportModules" / "Il2Cpp.deps.json").DeleteFile();
 			(stagingMLDependencies / "CompatibilityLayers" / "Stress_Level_Zero_Il2Cpp.dll").DeleteFile();
+			(stagingMLDependencies / "CompatibilityLayers" / "Stress_Level_Zero_Il2Cpp.deps.json").DeleteFile();
 		}
 		else
 		{
 			(stagingMLDependencies / "SupportModules" / "Mono.dll").DeleteFile();
+			(stagingMLDependencies / "SupportModules" / "Mono.pdb").DeleteFile();
+			(stagingMLDependencies / "SupportModules" / "Mono.dll.mdb").DeleteFile();
 			(stagingMLDependencies / "CompatibilityLayers" / "IPA.dll").DeleteFile();
+			(stagingMLDependencies / "CompatibilityLayers" / "IPA.pdb").DeleteFile();
+			(stagingMLDependencies / "CompatibilityLayers" / "IPA.dll.mdb").DeleteFile();
 			(stagingMLDependencies / "CompatibilityLayers" / "Muse_Dash_Mono.dll").DeleteFile();
+			(stagingMLDependencies / "CompatibilityLayers" / "Muse_Dash_Mono.pdb").DeleteFile();
+			(stagingMLDependencies / "CompatibilityLayers" / "Muse_Dash_Mono.dll.mdb").DeleteFile();
 		}
-
-		(stagingMLDependencies / "MonoBleedingEdge.x64").DeleteDirectory();
-		(stagingMLDependencies / "Bootstrap.dll").DeleteFile();
 
 		stagingDirectory.ZipTo(OutputDir / $"MLLoader-{projectSubname}-{configuration}-{MLVersionName}.zip");
 		stagingDirectory.DeleteDirectory();
@@ -118,9 +122,8 @@ class Build : NukeBuild
 	    .DependsOn(DownloadDependencies, Clean)
         .Executes(() =>
 	    {
-			HandleBuild("UnityMono", "net35", "BepInEx5", false);
 			HandleBuild("UnityMono", "net35", "BepInEx6", false);
-			HandleBuild("IL2CPP", "netstandard2.1", "BepInEx6", true);
+			HandleBuild("IL2CPP", "net6.0", "BepInEx6", true);
 
 			MelonloaderFilesPath.DeleteDirectory();
 	    });

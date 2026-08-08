@@ -3,13 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using AssetsTools.NET;
 using AssetsTools.NET.Extra;
-using UnityVersion = AssetRipper.VersionUtilities.UnityVersion;
+using MelonLoader.Logging;
+using MelonLoader.Utils;
+using UnityVersion = AssetRipper.Primitives.UnityVersion;
 
 namespace MelonLoader.InternalUtils
 {
@@ -19,40 +19,48 @@ namespace MelonLoader.InternalUtils
 
         public static string GameName { get; private set; }
         public static string GameDeveloper { get; private set; }
-        public static UnityVersion EngineVersion { get; private set; } = UnityVersion.MinVersion;
+        public static UnityVersion EngineVersion { get; private set; }
         public static string GameVersion { get; private set; }
+
+        private static UnityVersion TryParse(string version)
+        {
+            UnityVersion returnval = UnityVersion.MinVersion;
+            try 
+            {
+                returnval = UnityVersion.Parse(version); 
+            }
+            catch (Exception ex)
+            {
+                MelonDebug.Error(ex.ToString());
+                returnval = UnityVersion.MinVersion;
+            }
+            return returnval;
+        }
 
         internal static void Setup()
         {
-            string gameDataPath = MelonUtils.GetGameDataDirectory();
+            string gameDataPath = MelonEnvironment.UnityGameDataDirectory;
 
-            if (!string.IsNullOrEmpty(MelonLaunchOptions.Core.UnityVersion))
+            if (!string.IsNullOrEmpty(LoaderConfig.Current.UnityEngine.VersionOverride))
+                EngineVersion = TryParse(LoaderConfig.Current.UnityEngine.VersionOverride);
+
+            try
             {
-                try { EngineVersion = UnityVersion.Parse(MelonLaunchOptions.Core.UnityVersion); }
-                catch (Exception ex)
-                {
-                    if (MelonDebug.IsEnabled())
-                        MelonLogger.Error(ex);
-                }
+                AssetsManager assetsManager = new AssetsManager();
+                ReadGameInfo(assetsManager, gameDataPath);
+                assetsManager.UnloadAll();
             }
-
-            AssetsManager assetsManager = new AssetsManager();
-            ReadGameInfo(assetsManager, gameDataPath);
-            assetsManager.UnloadAll();
+            catch (Exception ex)
+            {
+                MelonDebug.Error(ex.ToString());
+            }
 
             if (string.IsNullOrEmpty(GameDeveloper)
                 || string.IsNullOrEmpty(GameName))
                 ReadGameInfoFallback();
 
             if (EngineVersion == UnityVersion.MinVersion)
-            {
-                try { EngineVersion = ReadVersionFallback(gameDataPath); }
-                catch (Exception ex)
-                {
-                    if (MelonDebug.IsEnabled())
-                        MelonLogger.Error(ex);
-                }
-            }
+                EngineVersion = ReadVersionFallback(gameDataPath);
 
             if (string.IsNullOrEmpty(GameDeveloper))
                 GameDeveloper = DefaultInfo;
@@ -61,12 +69,12 @@ namespace MelonLoader.InternalUtils
             if (string.IsNullOrEmpty(GameVersion))
                 GameVersion = DefaultInfo;
 
-            MelonLogger.WriteLine(ConsoleColor.Magenta);
+            MelonLogger.WriteLine(ColorARGB.Magenta);
             MelonLogger.Msg($"Game Name: {GameName}");
             MelonLogger.Msg($"Game Developer: {GameDeveloper}");
             MelonLogger.Msg($"Unity Version: {EngineVersion}");
             MelonLogger.Msg($"Game Version: {GameVersion}");
-            MelonLogger.WriteLine(ConsoleColor.Magenta);
+            MelonLogger.WriteLine(ColorARGB.Magenta);
             MelonLogger.WriteSpacer();
         }
 
@@ -98,7 +106,7 @@ namespace MelonLoader.InternalUtils
                     assetsManager.LoadClassDatabaseFromPackage(instance.file.Metadata.UnityVersion);
 
                 if (EngineVersion == UnityVersion.MinVersion)
-                    EngineVersion = UnityVersion.Parse(instance.file.Metadata.UnityVersion);
+                    EngineVersion = TryParse(instance.file.Metadata.UnityVersion);
 
                 List<AssetFileInfo> assetFiles = instance.file.GetAssetsOfType(AssetClassID.PlayerSettings);
                 if (assetFiles.Count > 0)
@@ -120,13 +128,15 @@ namespace MelonLoader.InternalUtils
                         if (productName != null)
                             GameName = productName.AsString;
                     }
+                    else
+                    {
+                        MelonLogger.Warning("Unable to find PlayerSettings in globalgamemanagers. Possible out-dated classdata.tpk present. Using fallback method.");
+                    }
                 }
             }
             catch(Exception ex)
             {
-                if (MelonDebug.IsEnabled())
-                    MelonLogger.Error(ex);
-                //MelonLogger.Error("Failed to Initialize Assets Manager!");
+                MelonDebug.Error(ex.ToString());
             }
             if (instance != null)
                 instance.file.Close();
@@ -136,7 +146,7 @@ namespace MelonLoader.InternalUtils
         {
             try
             {
-                string appInfoFilePath = Path.Combine(MelonUtils.GetGameDataDirectory(), "app.info");
+                string appInfoFilePath = Path.Combine(MelonEnvironment.UnityGameDataDirectory, "app.info");
                 if (!File.Exists(appInfoFilePath))
                     return;
 
@@ -153,21 +163,20 @@ namespace MelonLoader.InternalUtils
             }
             catch (Exception ex)
             {
-                if (MelonDebug.IsEnabled())
-                    MelonLogger.Error(ex);
+                MelonDebug.Error(ex.ToString());
             }
         }
 
         private static UnityVersion ReadVersionFallback(string gameDataPath)
         {
-            string unityPlayerPath = Path.Combine(MelonUtils.GameDirectory, "UnityPlayer.dll");
+            string unityPlayerPath = MelonEnvironment.UnityPlayerPath;
             if (!File.Exists(unityPlayerPath))
-                unityPlayerPath = MelonUtils.GetApplicationPath();
+                unityPlayerPath = MelonEnvironment.GameExecutablePath;
 
             if (Environment.OSVersion.Platform == PlatformID.Win32NT)
             {
                 var unityVer = FileVersionInfo.GetVersionInfo(unityPlayerPath);
-                return new UnityVersion((ushort)unityVer.FileMajorPart, (ushort)unityVer.FileMinorPart, (ushort)unityVer.FileBuildPart);
+                return TryParse(unityVer.FileVersion);
             }
 
             try
@@ -178,8 +187,7 @@ namespace MelonLoader.InternalUtils
             }
             catch (Exception ex)
             {
-                if (MelonDebug.IsEnabled())
-                    MelonLogger.Error(ex);
+                MelonDebug.Error(ex.ToString());
             }
 
             try
@@ -190,11 +198,10 @@ namespace MelonLoader.InternalUtils
             }
             catch (Exception ex)
             {
-                if (MelonDebug.IsEnabled())
-                    MelonLogger.Error(ex);
+                MelonDebug.Error(ex.ToString());
             }
 
-            return default;
+            return UnityVersion.MinVersion;
         }
 
         private static UnityVersion GetVersionFromGlobalGameManagers(byte[] ggmBytes)
@@ -222,7 +229,7 @@ namespace MelonLoader.InternalUtils
                 unityVer = verString.ToString().Trim();
             }
 
-            return UnityVersion.Parse(unityVer);
+            return TryParse(unityVer);
         }
 
         private static UnityVersion GetVersionFromDataUnity3D(Stream fileStream)
@@ -245,7 +252,7 @@ namespace MelonLoader.InternalUtils
                 verString.Append(Convert.ToChar(read));
             }
 
-            return UnityVersion.Parse(verString.ToString().Trim());
+            return TryParse(verString.ToString().Trim());
         }
     }
 }

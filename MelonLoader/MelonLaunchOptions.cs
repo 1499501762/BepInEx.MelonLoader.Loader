@@ -1,6 +1,5 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using BepInEx.Configuration;
 
 namespace MelonLoader
 {
@@ -8,154 +7,133 @@ namespace MelonLoader
     {
         private static Dictionary<string, Action> WithoutArg = new Dictionary<string, Action>();
         private static Dictionary<string, Action<string>> WithArg = new Dictionary<string, Action<string>>();
+        private static string[] _cmd;
 
-        static MelonLaunchOptions()
+         /// <summary>
+         /// Dictionary of all Arguments with value (if found) that were not used by MelonLoader
+         /// <para>
+         /// <b>Key</b> is the argument, <b>Value</b> is the value for the argument, <c>null</c> if not found
+         /// </para>
+         /// </summary>
+        public static Dictionary<string, string> ExternalArguments { get; private set; } = new Dictionary<string, string>();
+        public static Dictionary<string, string> InternalArguments { get; private set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// Array of All Command Line Arguments
+        /// </summary>
+        public static string[] CommandLineArgs
         {
-            AnalyticsBlocker.Setup();
-            Core.Setup();
-            Console.Setup();
-            Debug.Setup();
-            Il2CppAssemblyGenerator.Setup();
-            Logger.Setup();
-        }
-
-        internal static void LoadConfig(ConfigFile config)
-        {
-            Core.DebugMode =
-                config.Bind("LaunchArguments", "DebugMode", false, "Launches MelonLoader in debug mode, i.e. makes everything more verbose").Value;
-            const string loadModeDescription = "Sets the loading mode for {0}.\nNORMAL: Does not load {0} ending with .dev.dll\nDEV: Only loads {0} ending with .dev.dll\nBOTH: Loads all .dll files";
-            Core.LoadMode_Plugins =
-                config.Bind("LaunchArguments", "LoadMode_Plugins", Core.LoadModeEnum.NORMAL, string.Format(loadModeDescription, "plugins")).Value;
-            Core.LoadMode_Mods =
-                config.Bind("LaunchArguments", "LoadMode_Mods", Core.LoadModeEnum.NORMAL, string.Format(loadModeDescription, "mods")).Value;
-
-            Core.QuitFix =
-                config.Bind("LaunchArguments", "QuitFix", false, "Ensures that if a mod / plugin / MelonLoader itself requests the game to close, the game's process will be forcefully terminated if it does not close").Value;
-
-            Core.StartScreen =
-                config.Bind("LaunchArguments", "ShowStartScreen", false, "Enables the MelonLoader loading screen on game boot.").Value;
-            
-            Core.EnablePatchShield =
-                config.Bind("Framework", "EnablePatchShield", true, "If true, configures Harmony in such a way that prevents patching critical / sensitive code. Some plugins will refuse to load if this is disabled.").Value;
-
-            Core.EnableObfuscationCheck =
-	            config.Bind("Framework", "EnableObfuscationCheck", false, "If true, the Mono runtime will refuse to load assemblies that have been obfuscated. Some plugins (notably VRCMG plugins) will refuse to load if this is disabled.").Value;
-
-            Core.EnableCompatibilityLayers =
-                config.Bind("Framework", "EnableCompatibilityLayers", true, "If true, MelonLoader will load compatibility layer modules so it can load other modloader plugins (such as IPA and MDML), and other misc. integrations.\nIs required to remain true, as disabling this seems to break regular plugin loading.").Value;
-
-            Core.EnableBHapticsIntegration =
-                config.Bind("Framework", "EnableBHapticsIntegration", true, "If true, MelonLoader will load its BHaptics library module.").Value;
-            
-            Core.EnableAssemblyGeneration =
-                config.Bind("Framework", "EnableAssemblyGeneration", false, "If true, MelonLoader will generate it's own set of unhollowed assemblies alongside BepInEx.").Value;
-            
-            Core.EnableFixes =
-                config.Bind("Framework", "EnableFixes", false, "If true, MelonLoader's Unity fixes will be applied. Untested and could possibly cause issues with BepInEx code.").Value;
-        }
-
-        internal static void LoadCLI()
-        {
-            List<string> foundOptions = new List<string>();
-
-            LemonEnumerator<string> argEnumerator = new LemonEnumerator<string>(Environment.GetCommandLineArgs());
-            while (argEnumerator.MoveNext())
+            get
             {
-                string fullcmd = argEnumerator.Current;
+                if (_cmd == null)
+                    _cmd = Environment.GetCommandLineArgs();
+                return _cmd;
+            }
+        }
+
+        internal static void Load()
+        {
+            string[] args = CommandLineArgs;
+            int maxLen = args.Length;
+            for (int i = 1; i < maxLen; i++)
+            {
+                string fullcmd = args[i];
                 if (string.IsNullOrEmpty(fullcmd))
                     continue;
 
-                if (!fullcmd.StartsWith("--"))
+                // Parse Prefix
+                string noPrefixCmd = fullcmd;
+                if (noPrefixCmd.StartsWith("--"))
+                    noPrefixCmd = noPrefixCmd.Remove(0, 2);
+                else if (noPrefixCmd.StartsWith("-"))
+                    noPrefixCmd = noPrefixCmd.Remove(0, 1);
+                else
+                {
+                    // Unknown Command, Add it to Dictionary
+                    ExternalArguments[noPrefixCmd] = null;
                     continue;
+                }
 
-                string cmd = fullcmd.Remove(0, 2);
-
-                if (WithoutArg.TryGetValue(cmd, out Action withoutArgFunc))
+                // Parse Argumentless Commands
+                if (WithoutArg.TryGetValue(noPrefixCmd, out Action withoutArgFunc))
                 {
-                    foundOptions.Add(fullcmd);
+                    InternalArguments[noPrefixCmd] = null;
                     withoutArgFunc();
+                    continue;
                 }
-                else if (WithArg.TryGetValue(cmd, out Action<string> withArgFunc))
+
+                // Parse Argument
+                string cmdArg = null;
+                int equalsPos = noPrefixCmd.IndexOf('=');
+                if (equalsPos > -1)
                 {
-                    if (!argEnumerator.MoveNext())
-                        continue;
-
-                    string cmdArg = argEnumerator.Current;
-                    if (string.IsNullOrEmpty(cmdArg))
-                        continue;
-
-                    if (cmdArg.StartsWith("--"))
-                        continue;
-
-                    foundOptions.Add($"{fullcmd} = {cmdArg}");
-                    withArgFunc(cmdArg);
+                    cmdArg = noPrefixCmd.Substring(equalsPos + 1);
+                    noPrefixCmd = noPrefixCmd.Substring(0, equalsPos);
                 }
+
+                if ((string.IsNullOrEmpty(cmdArg)
+                        && ((i + 1) >= maxLen))
+                    || string.IsNullOrEmpty(cmdArg)
+                    || cmdArg.StartsWith("--")
+                    || cmdArg.StartsWith("-"))
+                {
+                    // Unknown Command, Add it to Dictionary
+                    ExternalArguments[noPrefixCmd] = null;
+                    continue;
+                }
+
+                // Parse Argument Commands
+                if (WithArg.TryGetValue(noPrefixCmd, out Action<string> withArgFunc))
+                {
+                    InternalArguments[noPrefixCmd] = cmdArg;
+                    withArgFunc(cmdArg);
+                    continue;
+                }
+
+                // Unknown Command with Argument, Add it to Dictionary
+                ExternalArguments[noPrefixCmd] = cmdArg;
             }
-
-            if (foundOptions.Count <= 0)
-                return;
-
-            MelonLogger.WriteLine(ConsoleColor.Magenta);
-            MelonLogger.Msg(ConsoleColor.Cyan, "Launch Options:");
-            foreach (string cmd in foundOptions)
-                MelonLogger.Msg($"\t{cmd}");
-            MelonLogger.WriteLine(ConsoleColor.Magenta);
-            MelonLogger.WriteSpacer();
         }
 
-#region Args
-        public static class AnalyticsBlocker
-        {
-            public static bool ShouldDAB { get; internal set; }
+        #region Obsolete
 
-            internal static void Setup()
-            {
-                WithoutArg["melonloader.dab"] = () => ShouldDAB = true;
-
-            }
-        }
-
+        [Obsolete("Use LoaderConfig.Current.Loader instead. This will be removed in a future update.", true)]
         public static class Core
         {
+            [Obsolete("This option isn't used anymore. This will be removed in a future update.", true)]
             public enum LoadModeEnum
             {
                 NORMAL,
                 DEV,
                 BOTH
             }
-            public static LoadModeEnum LoadMode_Plugins { get; internal set; }
-            public static LoadModeEnum LoadMode_Mods { get; internal set; }
-            public static bool QuitFix { get; internal set; }
-            public static bool StartScreen { get; internal set; } = true;
-            public static string UnityVersion { get; internal set; }
-            public static bool EnablePatchShield { get; internal set; }
-            public static bool EnableObfuscationCheck { get; internal set; }
-            public static bool EnableCompatibilityLayers { get; internal set; }
-            public static bool EnableBHapticsIntegration { get; internal set; }
-            public static bool EnableAssemblyGeneration { get; internal set; }
-            public static bool EnableFixes { get; internal set; }
-            public static bool DebugMode { get; internal set; }
 
-            internal static void Setup()
-            {
-                WithoutArg["quitfix"] = () => QuitFix = true;
-                WithoutArg["melonloader.disablestartscreen"] = () => StartScreen = false;
-                WithArg["melonloader.loadmodeplugins"] = (string arg) =>
-                {
-                    if (int.TryParse(arg, out int valueint))
-                        LoadMode_Plugins = (LoadModeEnum)MelonUtils.Clamp(valueint, (int)LoadModeEnum.NORMAL, (int)LoadModeEnum.BOTH);
-                };
-                WithArg["melonloader.loadmodemods"] = (string arg) =>
-                {
-                    if (int.TryParse(arg, out int valueint))
-                        LoadMode_Mods = (LoadModeEnum)MelonUtils.Clamp(valueint, (int)LoadModeEnum.NORMAL, (int)LoadModeEnum.BOTH);
-                };
-                WithArg["melonloader.unityversion"] = (string arg) => UnityVersion = arg;
-            }
+            [Obsolete("This option isn't used anymore. It will always return NORMAL. This will be removed in a future update.", true)]
+            public static LoadModeEnum LoadMode_Plugins => LoadModeEnum.NORMAL;
+
+            [Obsolete("This option isn't used anymore. It will always return NORMAL. This will be removed in a future update.", true)]
+            public static LoadModeEnum LoadMode_Mods => LoadModeEnum.NORMAL;
+
+            [Obsolete("Use LoaderConfig.Current.Loader.ForceQuit instead. This will be removed in a future update.", true)]
+            public static bool QuitFix => LoaderConfig.Current.Loader.ForceQuit;
+
+            [Obsolete("Use LoaderConfig.Current.Loader.DisableStartScreen instead. This will be removed in a future update.", true)]
+            public static bool StartScreen => !LoaderConfig.Current.Loader.DisableStartScreen;
+
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.VersionOverride instead. This will be removed in a future update.", true)]
+            public static string UnityVersion => LoaderConfig.Current.UnityEngine.VersionOverride;
+
+            [Obsolete("Use LoaderConfig.Current.Loader.DebugMode instead. This will be removed in a future update.", true)]
+            public static bool IsDebug => LoaderConfig.Current.Loader.DebugMode;
+
+            [Obsolete("Use LoaderConfig.Current.Loader.LaunchDebugger instead. This will be removed in a future update.", true)]
+            public static bool UserWantsDebugger => LoaderConfig.Current.Loader.LaunchDebugger;
         }
 
+        [Obsolete("Use LoaderConfig.Current.Console instead. This will be removed in a future update.", true)]
         public static class Console
         {
+            [Obsolete("Use LoaderConfig.CoreConfig.LoaderTheme instead. This will be removed in a future update.", true)]
             public enum DisplayMode
             {
                 NORMAL,
@@ -164,83 +142,65 @@ namespace MelonLoader
                 RANDOMRAINBOW,
                 LEMON
             };
-            public static DisplayMode Mode { get; internal set; }
-            public static bool CleanUnityLogs { get; internal set; } = true;
-            public static bool ShouldSetTitle { get; internal set; } = true;
-            public static bool AlwaysOnTop { get; internal set; }
-            public static bool ShouldHide { get; internal set; }
-            public static bool HideWarnings { get; internal set; }
 
-            internal static void Setup()
-            {
-                WithoutArg["melonloader.disableunityclc"] = () => CleanUnityLogs = false;
-                WithoutArg["melonloader.consoledst"] = () => ShouldSetTitle = false;
-                WithoutArg["melonloader.consoleontop"] = () => AlwaysOnTop = true;
-                WithoutArg["melonloader.hideconsole"] = () => ShouldHide = true;
-                WithoutArg["melonloader.hidewarnings"] = () => HideWarnings = true;
+            [Obsolete("Use LoaderConfig.Current.Loader.Theme instead. This will be removed in a future update.", true)]
+            public static DisplayMode Mode => (DisplayMode)LoaderConfig.Current.Loader.Theme;
 
-                WithArg["melonloader.consolemode"] = (string arg) =>
-                {
-                    if (int.TryParse(arg, out int valueint))
-                        Mode = (DisplayMode)MelonUtils.Clamp(valueint, (int)DisplayMode.NORMAL, (int)DisplayMode.LEMON);
-                };
-            }
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.DisableConsoleLogCleaner instead. This will be removed in a future update.", true)]
+            public static bool CleanUnityLogs => !LoaderConfig.Current.UnityEngine.DisableConsoleLogCleaner;
+
+            [Obsolete("Use LoaderConfig.Current.Console.DontSetTitle instead. This will be removed in a future update.", true)]
+            public static bool ShouldSetTitle => !LoaderConfig.Current.Console.DontSetTitle;
+
+            [Obsolete("Use LoaderConfig.Current.Console.AlwaysOnTop instead. This will be removed in a future update.", true)]
+            public static bool AlwaysOnTop => LoaderConfig.Current.Console.AlwaysOnTop;
+
+            [Obsolete("Use LoaderConfig.Current.Console.Hide instead. This will be removed in a future update.", true)]
+            public static bool ShouldHide => LoaderConfig.Current.Console.Hide;
+
+            [Obsolete("Use LoaderConfig.Current.Console.HideWarnings instead. This will be removed in a future update.", true)]
+            public static bool HideWarnings => LoaderConfig.Current.Console.HideWarnings;
         }
 
-        public static class Debug
+        [Obsolete("Use LoaderConfig.Current.UnityEngine instead. This will be removed in a future update.", true)]
+        public static class Cpp2IL
         {
-            public static bool Enabled { get; internal set; }
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.EnableCpp2ILCallAnalyzer instead. This will be removed in a future update.", true)]
+            public static bool CallAnalyzer => LoaderConfig.Current.UnityEngine.EnableCpp2ILCallAnalyzer;
 
-            internal static void Setup()
-            {
-                WithoutArg["melonloader.debug"] = () => Enabled = true;
-
-            }
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.EnableCpp2ILNativeMethodDetector instead. This will be removed in a future update.", true)]
+            public static bool NativeMethodDetector => LoaderConfig.Current.UnityEngine.EnableCpp2ILNativeMethodDetector;
         }
 
+        [Obsolete("Use LoaderConfig.Current.UnityEngine instead. This will be removed in a future update.", true)]
         public static class Il2CppAssemblyGenerator
         {
-            public static bool ForceRegeneration { get; internal set; }
-            public static bool OfflineMode { get; internal set; }
-            public static string ForceVersion_Dumper { get; internal set; }
-            public static string ForceVersion_Il2CppAssemblyUnhollower { get; internal set; }
-            public static string ForceRegex { get; internal set; }
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.ForceRegeneration instead. This will be removed in a future update.", true)]
+            public static bool ForceRegeneration => LoaderConfig.Current.UnityEngine.ForceRegeneration;
 
-            internal static void Setup()
-            {
-                WithoutArg["melonloader.agfoffline"] = () => OfflineMode = true;
-                WithoutArg["melonloader.agfregenerate"] = () => ForceRegeneration = true;
-                WithArg["melonloader.agfvdumper"] = (string arg) => ForceVersion_Dumper = arg;
-                WithArg["melonloader.agfvunhollower"] = (string arg) => ForceVersion_Il2CppAssemblyUnhollower = arg;
-                WithArg["melonloader.agfregex"] = (string arg) => ForceRegex = arg;
-            }
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.ForceOfflineGeneration instead. This will be removed in a future update.", true)]
+            public static bool OfflineMode => LoaderConfig.Current.UnityEngine.ForceOfflineGeneration;
+
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.ForceIl2CppDumperVersion instead. This will be removed in a future update.", true)]
+            public static string ForceVersion_Dumper => LoaderConfig.Current.UnityEngine.ForceIl2CppDumperVersion;
+
+            [Obsolete("Use LoaderConfig.Current.UnityEngine.ForceGeneratorRegex instead. This will be removed in a future update.", true)]
+            public static string ForceRegex => LoaderConfig.Current.UnityEngine.ForceGeneratorRegex;
         }
 
+        [Obsolete("Use LoaderConfig.Logs instead. This will be removed in a future update.", true)]
         public static class Logger
         {
-            public static int MaxLogs { get; internal set; } = 10;
-            public static int MaxWarnings { get; internal set; } = 10;
-            public static int MaxErrors { get; internal set; } = 10;
+            [Obsolete("Use LoaderConfig.Current.Logs.MaxLogs instead. This will be removed in a future update.", true)]
+            public static int MaxLogs => (int)LoaderConfig.Current.Logs.MaxLogs;
 
-            internal static void Setup()
-            {
-                WithArg["melonloader.maxlogs"] = (string arg) =>
-                {
-                    if (int.TryParse(arg, out int valueint))
-                        MaxLogs = valueint;
-                };
-                WithArg["melonloader.maxwarnings"] = (string arg) =>
-                {
-                    if (int.TryParse(arg, out int valueint))
-                        MaxWarnings = valueint;
-                };
-                WithArg["melonloader.maxerrors"] = (string arg) =>
-                {
-                    if (int.TryParse(arg, out int valueint))
-                        MaxErrors = valueint;
-                };
-            }
+            [Obsolete("This option isn't used anymore. It will always return 10. This will be removed in a future update.", true)]
+            public static int MaxWarnings => 10;
+
+            [Obsolete("This option isn't used anymore. It will always return 10. This will be removed in a future update.", true)]
+            public static int MaxErrors => 10;
         }
-        #endregion
+
+        #endregion Obsolete
     }
 }

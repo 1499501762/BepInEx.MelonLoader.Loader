@@ -4,12 +4,13 @@
 
 # BepInEx.MelonLoader.Loader
 
-Current version supports MelonLoader **0.5.7**.
+Current version supports MelonLoader **0.7.3**.
 
 Loader for BepInEx to be able to use MelonLoader plugins.
 
 #### Notes
 
+- This loader targets **BepInEx 6.0.0-be.785** (BepInEx.Unity.Mono / BepInEx.Unity.IL2CPP). The BepInEx 5 build has been dropped in the MelonLoader 0.7.x port.
 - Launch options for MelonLoader are located in `BepInEx/config`. Additional options configuring the internal components of MelonLoader are also located here. The configuration file will be generated on the first launch automatically.
 - The Mods and Plugins folders have been moved to `MLLoader/Mods` and `MLLoader/Plugins` folders respectively. Other folders and files have been moved to the `MLLoader` folder, but some plugins/mods won't respect this.
 

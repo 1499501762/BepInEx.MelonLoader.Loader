@@ -1,40 +1,83 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-	<PropertyGroup>
-		<TargetFramework>net35</TargetFramework>
-		<LangVersion>Latest</LangVersion>
-		<AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-		<Configurations>BepInEx5;BepInEx6</Configurations>
-		<Platforms>AnyCPU</Platforms>
-	</PropertyGroup>
-	<PropertyGroup>
-		<RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
-	</PropertyGroup>
-	<ItemDefinitionGroup>
-		  <PackageReference>
-				<PrivateAssets>all</PrivateAssets>
-		  </PackageReference>
-   </ItemDefinitionGroup>
-	<ItemGroup>
-		<PackageReference Include="AssetRipper.VersionUtilities" Version="1.2.1" />
-		<PackageReference Include="AssetsTools.NET" Version="3.0.0-preview1" />
-		<PackageReference Include="HarmonyX" Version="2.10.0" />
-		<PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2">
-		  <PrivateAssets>all</PrivateAssets>
-		  <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-		</PackageReference>
-		<PackageReference Include="Samboy063.Tomlet" Version="5.0.0" />
-		<PackageReference Include="bHapticsLib" Version="1.0.6" />
-	</ItemGroup>
-	<ItemGroup Condition="'$(Configuration)' == 'BepInEx5'">
-		<PackageReference Include="BepInEx.BaseLib" Version="5.4.21" IncludeAssets="compile" />
-	</ItemGroup>
-	<ItemGroup Condition="'$(Configuration)' == 'BepInEx6'">
-		<PackageReference Include="BepInEx.Core" Version="6.0.0-be.572" />
-	</ItemGroup>
-	<ItemGroup>
-		<EmbeddedResource Include="Resources\classdata.tpk" />
-	</ItemGroup>
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>net35;net6.0</TargetFrameworks>
+        <LangVersion>Latest</LangVersion>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+        <Version>0.7.3</Version>
+        <Configurations>Debug;Release</Configurations>
+        <Platforms>AnyCPU</Platforms>
+        <DebugType>portable</DebugType>
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+        <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+        <DefineConstants>$(DefineConstants);WINDOWS;X64</DefineConstants>
+        <NoWarn>IDE0051;CS0067;CS0649;CS0169;CS0414;CS0659;CS0660;CS0661</NoWarn>
+    </PropertyGroup>
+
+    <!-- Version variables (from upstream MelonLoader v0.7.3 Directory.Build.props) -->
+    <PropertyGroup>
+        <IcedVersion>1.21.0</IcedVersion>
+        <TomletVersion>6.2.0</TomletVersion>
+        <MonoModVersion>22.7.31.1</MonoModVersion>
+        <MonoCecilVersion>0.11.6</MonoCecilVersion>
+        <HarmonyXVersion>2.10.2</HarmonyXVersion>
+        <AssetToolsVersion>3.0.4</AssetToolsVersion>
+        <AssetRipperVersion>3.2.0</AssetRipperVersion>
+        <AsmResolverVersion>6.0.0-beta.5</AsmResolverVersion>
+        <Il2CppInteropVersion>1.5.1-ci.845</Il2CppInteropVersion>
+    </PropertyGroup>
+
+    <!-- Mono (net35) overrides -->
+    <PropertyGroup Condition="'$(TargetFramework)' == 'net35'">
+        <MonoCecilVersion>0.10.4</MonoCecilVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="BepInEx.Core" Version="6.0.0-be.785" IncludeAssets="compile" />
+        <PackageReference Include="AssetRipper.Primitives" Version="$(AssetRipperVersion)" />
+        <PackageReference Include="AssetsTools.NET" Version="$(AssetToolsVersion)" />
+        <PackageReference Include="HarmonyX" Version="$(HarmonyXVersion)" />
+        <PackageReference Include="Mono.Cecil" Version="$(MonoCecilVersion)" />
+        <PackageReference Include="MonoMod" Version="$(MonoModVersion)" />
+        <PackageReference Include="MonoMod.RuntimeDetour" Version="$(MonoModVersion)" />
+        <PackageReference Include="MonoMod.Utils" Version="$(MonoModVersion)" />
+        <PackageReference Include="Samboy063.Tomlet" Version="$(TomletVersion)" />
+        <PackageReference Include="AsmResolver.DotNet" Version="$(AsmResolverVersion)" />
+        <PackageReference Include="bHapticsLib" Version="1.0.6" />
+        <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+        <PackageReference Include="IndexRange" Version="1.1.1" />
+        <PackageReference Include="Microsoft.Bcl" Version="1.1.10" />
+        <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
+        <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.661903" />
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Primitives" Version="10.0.3" />
+        <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.3" />
+        <PackageReference Include="System.Runtime.InteropServices.RuntimeInformation" Version="4.3.0" />
+        <PackageReference Include="System.Security.Permissions" Version="10.0.3" />
+        <PackageReference Include="Iced" Version="$(IcedVersion)" />
+        <PackageReference Include="Il2CppInterop.Common" Version="$(Il2CppInteropVersion)" />
+        <PackageReference Include="Il2CppInterop.Runtime" Version="$(Il2CppInteropVersion)" />
+        <PackageReference Include="Il2CppInterop.Generator" Version="$(Il2CppInteropVersion)" />
+        <PackageReference Include="Il2CppInterop.HarmonySupport" Version="$(Il2CppInteropVersion)" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Resources\classdata.tpk" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="..\MelonLoader.Bootstrap\Logging\ColorARGB.cs" Link="Utils\ColorARGB.cs" />
+        <Compile Include="..\MelonLoader.Bootstrap\SharedDelegates.cs" Link="BootstrapUtils\SharedDelegates.cs" />
+    </ItemGroup>
 </Project>

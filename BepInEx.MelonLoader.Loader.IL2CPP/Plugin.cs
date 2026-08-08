@@ -1,6 +1,8 @@
 ﻿using System;
-using BepInEx.IL2CPP;
-using MLCore = MelonLoader.Core;
+using System.Diagnostics;
+using System.IO;
+using BepInEx.Unity.IL2CPP;
+using MelonLoader.Hosting;
 
 
 namespace BepInEx.MelonLoader.Loader.IL2CPP
@@ -13,13 +15,27 @@ namespace BepInEx.MelonLoader.Loader.IL2CPP
             AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
             {
                 if (args.Name.Contains("MelonLoader"))
-                    return typeof(MLCore).Assembly;
+                    return typeof(BepInExHost).Assembly;
                 return null;
             };
 
-            MLCore.Initialize(Config, false);
-            MLCore.PreStart();
-            MLCore.Start();
+            BepInExHost.Initialize(GetMelonLoaderBaseDirectory());
+            BepInExHost.Start();
+        }
+
+        private static string GetMelonLoaderBaseDirectory()
+        {
+            var gameDir = ".";
+            try
+            {
+                gameDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName) ?? ".";
+            }
+            catch
+            {
+                // Fall back to the working directory if the executable path can't be resolved.
+            }
+
+            return Path.Combine(gameDir, "MLLoader");
         }
     }
 }

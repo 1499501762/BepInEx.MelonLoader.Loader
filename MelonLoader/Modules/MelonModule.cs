@@ -2,6 +2,11 @@
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using MelonLoader.Logging;
+
+#if NET6_0_OR_GREATER
+using System.Runtime.Loader;
+#endif
 
 namespace MelonLoader.Modules
 {
@@ -52,7 +57,11 @@ namespace MelonLoader.Modules
             Assembly asm;
             try
             {
+#if NET6_0_OR_GREATER
+                asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(moduleInfo.fullPath);
+#else
                 asm = Assembly.LoadFrom(moduleInfo.fullPath);
+#endif
             }
             catch (Exception ex)
             {
@@ -84,7 +93,7 @@ namespace MelonLoader.Modules
             obj.Name = name;
             obj.Assembly = asm;
             obj.ModuleInfo = moduleInfo;
-            obj.LoggerInstance = new MelonLogger.Instance(name, ConsoleColor.Magenta); // Magenta cool :)
+            obj.LoggerInstance = new MelonLogger.Instance(name, ColorARGB.Magenta); // Magenta cool :)
 
             try
             {
@@ -114,6 +123,7 @@ namespace MelonLoader.Modules
             public readonly string fullPath;
             internal readonly Func<bool> shouldBeRemoved;
             internal readonly Func<bool> shouldBeIgnored;
+            internal MelonModule moduleGC;
 
             internal Info(string path, Func<bool> shouldBeIgnored = null, Func<bool> shouldBeRemoved = null)
             {

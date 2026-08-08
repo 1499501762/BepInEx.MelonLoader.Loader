@@ -3,12 +3,12 @@
     <PropertyGroup>
         <TargetFramework>net35</TargetFramework>
         <Description>MelonLoader loader for UnityMono games</Description>
-        <Version>2.1.0</Version>
+        <Version>2.2.0</Version>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <LangVersion>latest</LangVersion>
         <PackageId>BepInEx.MelonLoader.Loader.UnityMono</PackageId>
         <RootNamespace>BepInEx.MelonLoader.Loader.UnityMono</RootNamespace>
-        <Configurations>BepInEx5;BepInEx6</Configurations>
+        <Configurations>BepInEx6</Configurations>
         <Platforms>AnyCPU</Platforms>
         <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
         <OutputPath>$(SolutionDir)Output\$(Configuration)\UnityMono\</OutputPath>
@@ -22,11 +22,8 @@
         </PackageReference>
         <PackageReference Include="UnityEngine" Version="5.6.1" IncludeAssets="compile" />
     </ItemGroup>
-    <ItemGroup Condition="'$(Configuration)' == 'BepInEx5'">
-        <PackageReference Include="BepInEx.BaseLib" Version="5.4.21" IncludeAssets="compile" />
-    </ItemGroup>
-    <ItemGroup Condition="'$(Configuration)' == 'BepInEx6'">
-        <PackageReference Include="BepInEx.Unity" Version="6.0.0-be.572" IncludeAssets="compile" />
+    <ItemGroup>
+        <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.785" IncludeAssets="compile" />
     </ItemGroup>
 
     <ItemGroup>
