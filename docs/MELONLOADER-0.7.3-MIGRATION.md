@@ -14,7 +14,6 @@
 - 两个构建配置（UnityMono BepInEx6 / IL2CPP BepInEx6）全部通过
 
 ## 已完成（MelonLoader 0.7.3 移植）
-
 ### 阶段 1：0.7.3 核心项目建立
 - `MelonLoader/` 源码整体替换为 v0.7.3（251 个 .cs；git 保留 0.5.7 历史可回退）
 - `MelonLoader.csproj` 多目标 `net35;net6.0`，内联 v0.7.3 依赖版本变量
@@ -43,6 +42,20 @@
 - 完整 Nuke 构建通过，产出：
   - `Output/MLLoader-UnityMono-BepInEx6-v0.7.3.zip`
   - `Output/MLLoader-IL2CPP-BepInEx6-v0.7.3.zip`
+
+### 阶段 5：真实运行验证（Iron Nest: Heavy Turret Simulator，Il2Cpp，BepInEx 6.0.0-be.785）
+验证结果（`realrun.log`）：
+- ✅ MelonLoader 0.7.3 加载成功（`MelonLoader v0.7.3 Open-Beta`，Runtime Type: net6）
+- ✅ `Core::BasePath = <游戏目录>/MLLoader`（MLLoader 目录正确）
+- ✅ Il2CppAssemblyGenerator 完整运行（Cpp2IL 下载/执行、Interop 程序集生成成功）
+- ✅ Support Module `Il2Cpp.dll` 加载成功
+- ✅ BepInEx 链式加载器随后正常加载其他插件
+
+**修复的运行时错误（v2.2.1）**：
+- ❌→✅ `FieldAccessException`：`MelonLoader.Support.SceneHandler.Init` 访问 `Core.HarmonyInstance`
+- ❌→✅ `MethodAccessException`：`MelonLoader.Support.MelonDetourProvider+MelonDetour.Apply()` 访问 `CoreClrDelegateFixer.GetFixedPointerForDelegate`
+- 根因：官方 SupportModule（Il2Cpp.dll 等）需要访问 MelonLoader 的 internal 成员，但迁移时遗漏了 `InternalsVisibleTo` 声明
+- 修复：在 `MelonLoader.csproj` 恢复上游的 7 个 `InternalsVisibleTo`（MelonLoader.NativeHost / Il2CppAssemblyGenerator / Il2CppUnityTls / Il2Cpp / Mono / MelonStartScreen / EOS）
 
 ## 关键架构差异（0.5.7 vs 0.7.3）
 
