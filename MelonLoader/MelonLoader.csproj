@@ -32,6 +32,21 @@
         <MonoCecilVersion>0.10.4</MonoCecilVersion>
     </PropertyGroup>
 
+    <!--
+        Friend assemblies that need access to MelonLoader internals.
+        These match the official MelonLoader support modules (Il2Cpp.dll, Mono.dll,
+        Il2CppAssemblyGenerator.dll, MelonStartScreen.dll, ...) shipped in the release zip.
+    -->
+    <ItemGroup>
+        <InternalsVisibleTo Include="MelonLoader.NativeHost" />
+        <InternalsVisibleTo Include="Il2CppAssemblyGenerator" />
+        <InternalsVisibleTo Include="Il2CppUnityTls" />
+        <InternalsVisibleTo Include="Il2Cpp" />
+        <InternalsVisibleTo Include="Mono" />
+        <InternalsVisibleTo Include="MelonStartScreen" />
+        <InternalsVisibleTo Include="EOS" />
+    </ItemGroup>
+
     <ItemGroup>
         <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2">
           <PrivateAssets>all</PrivateAssets>
