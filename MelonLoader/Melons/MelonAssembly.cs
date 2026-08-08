@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Reflection;
+using MelonLoader.Hosting;
 using MelonLoader.Logging;
 using MelonLoader.Utils;
 #if NET6_0_OR_GREATER
@@ -81,6 +82,17 @@ namespace MelonLoader
             try
             {
 #if NET6_0_OR_GREATER
+                if (BepInExHost.IsActive)
+                {
+                    // When hosted by BepInEx, game types are provided by BepInEx's Il2CppInterop
+                    // interop (original namespaces). MelonLoader mods are compiled against
+                    // MelonLoader's interop (Il2Cpp.* prefix), so rewrite the game-type
+                    // references before loading, otherwise the mod fails with TypeLoadException.
+                    var rewritten = Il2CppInteropModRewriter.RewriteIfNeeded(path);
+                    if (rewritten != null)
+                        return LoadRawMelonAssembly(path, rewritten, null, loadMelons);
+                }
+
                 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
 #else
                 var assembly = Assembly.LoadFrom(path);

@@ -19,8 +19,36 @@ namespace BepInEx.MelonLoader.Loader.IL2CPP
                 return null;
             };
 
+            // Initialize only here. Core.Start (which loads mods) is deferred to the first
+            // frame update, so mods that look up scene objects (e.g. IronNestFCS finding
+            // "Player Turret Piece") run once the game's initial scene is ready.
             BepInExHost.Initialize(GetMelonLoaderBaseDirectory());
-            BepInExHost.Start();
+
+            CreateGameLoopDriver();
+        }
+
+        /// <summary>
+        /// BasePlugin is not a MonoBehaviour, so create our own driver component to
+        /// drive MelonLoader's game-loop events (the native SupportModule doesn't
+        /// deliver these in the BepInEx-hosted context).
+        /// </summary>
+        private static void CreateGameLoopDriver()
+        {
+            try
+            {
+                // BepInEx's official helper registers the managed type with
+                // Il2CppInterop and adds it to a persistent (DontDestroyOnLoad)
+                // GameObject, mirroring how other BepInEx IL2CPP mods add components.
+                // (Non-generic overload: our driver is compiled against reference
+                // UnityEngine assemblies, so it doesn't satisfy the T:Il2CppObjectBase
+                // generic constraint at build time.)
+                IL2CPPChainloader.AddUnityComponent(typeof(GameLoopDriver));
+                global::MelonLoader.MelonLogger.Msg("[BepInExHost] GameLoopDriver created");
+            }
+            catch (Exception e)
+            {
+                global::MelonLoader.MelonLogger.Error($"[BepInExHost] Failed to create GameLoopDriver: {e}");
+            }
         }
 
         private static string GetMelonLoaderBaseDirectory()

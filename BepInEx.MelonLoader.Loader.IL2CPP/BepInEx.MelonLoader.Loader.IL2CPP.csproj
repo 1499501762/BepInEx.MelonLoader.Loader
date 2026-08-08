@@ -4,7 +4,7 @@
         <TargetFramework>net6.0</TargetFramework>
         <AssemblyName>BepInEx.MelonLoader.Loader.IL2CPP</AssemblyName>
         <Description>MelonLoader loader for Il2Cpp games</Description>
-        <Version>2.2.1</Version>
+        <Version>2.3.0</Version>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <LangVersion>latest</LangVersion>
         <Configurations>BepInEx6</Configurations>
@@ -17,6 +17,13 @@
     <ItemGroup>
         <PackageReference Include="BepInEx.Unity.IL2CPP" Version="6.0.0-be.785" IncludeAssets="compile" />
         <PackageReference Include="BepInEx.PluginInfoProps" Version="1.1.0" />
+        <!-- Compile-time UnityEngine surface for the MonoBehaviour driver. At runtime
+             the types resolve against BepInEx's generated Il2Cpp interop, so these
+             reference assemblies must NOT be copied next to the plugin. -->
+        <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" ExcludeAssets="runtime" PrivateAssets="all" />
+        <!-- ClassInjector / RegisterTypeInIl2Cpp for the game-loop driver. Matches the
+             Il2CppInterop version loaded by BepInEx at runtime. -->
+        <PackageReference Include="Il2CppInterop.Runtime" Version="1.5.3" />
     </ItemGroup>
 
     <ItemGroup>

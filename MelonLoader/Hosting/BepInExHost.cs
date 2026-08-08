@@ -18,6 +18,13 @@ namespace MelonLoader.Hosting
         /// </summary>
         public static bool IsActive { get; private set; }
 
+        private static bool _started;
+
+        /// <summary>
+        /// True once <see cref="Start"/> has run (i.e. mods have been loaded).
+        /// </summary>
+        public static bool HasStarted => _started;
+
         private static ManualLogSource _logSource;
 
         /// <summary>
@@ -51,13 +58,71 @@ namespace MelonLoader.Hosting
             lib.NativeHookDetach = NativeHookDetach;
             BootstrapInterop.InitializeManaged(lib);
 
+            // Before MelonLoader loads anything, rewrite any assemblies under the MelonLoader
+            // folder that reference MelonLoader-style "Il2Cpp.*" game types so they bind to
+            // BepInEx's original-namespace interop. This covers assemblies a mod loads at
+            // runtime itself (e.g. hot-reloaded logic DLLs) that bypass the in-memory rewrite.
+            Il2CppInteropModRewriter.RewriteAllOnDisk(baseDirectory);
+
             Core.Initialize();
         }
 
         /// <summary>
         /// Starts MelonLoader (runs the Il2Cpp assembly generator when needed and loads mods).
+        /// Should be deferred until the game's initial scene is ready so mods that look up
+        /// scene objects (e.g. IronNestFCS finding "Player Turret Piece") work. Idempotent.
         /// </summary>
-        public static void Start() => Core.Start();
+        public static void Start()
+        {
+            if (_started)
+                return;
+            _started = true;
+            Core.Start();
+        }
+
+        // ---------------------------------------------------------------------
+        // Game-loop event delivery.
+        //
+        // The official SupportModule drives MelonLoader's game-loop events (Update,
+        // scene events, OnApplicationLateStart) through its own SM_Component / scene
+        // hooks. In the BepInEx-hosted context that integration does not deliver
+        // events (confirmed with diagnostics), which leaves MelonLoader mods inert.
+        //
+        // Instead, the BepInEx host plugins drive these events from Unity directly.
+        // ---------------------------------------------------------------------
+
+        private static bool _lateStartFired;
+
+        /// <summary>
+        /// True once <see cref="InvokeOnApplicationLateStart"/> has been called.
+        /// </summary>
+        public static bool HasOnApplicationLateStartFired => _lateStartFired;
+
+        public static void InvokeOnApplicationLateStart()
+        {
+            if (_lateStartFired)
+                return;
+            _lateStartFired = true;
+            MelonLogger.Msg("[BepInExHost] OnApplicationLateStart fired (host-driven)");
+            MelonEvents.OnApplicationLateStart.Invoke();
+        }
+
+        public static void InvokeUpdate() => MelonEvents.OnUpdate.Invoke();
+        public static void InvokeFixedUpdate() => MelonEvents.OnFixedUpdate.Invoke();
+        public static void InvokeLateUpdate() => MelonEvents.OnLateUpdate.Invoke();
+        public static void InvokeOnGUI() => MelonEvents.OnGUI.Invoke();
+
+        public static void InvokeSceneWasLoaded(int buildIndex, string sceneName)
+        {
+            MelonLogger.Msg($"[BepInExHost] OnSceneWasLoaded: {sceneName} ({buildIndex})");
+            MelonEvents.OnSceneWasLoaded.Invoke(buildIndex, sceneName);
+        }
+
+        public static void InvokeSceneWasInitialized(int buildIndex, string sceneName)
+            => MelonEvents.OnSceneWasInitialized.Invoke(buildIndex, sceneName);
+
+        public static void InvokeSceneWasUnloaded(int buildIndex, string sceneName)
+            => MelonEvents.OnSceneWasUnloaded.Invoke(buildIndex, sceneName);
 
         // Native hooks are not required when hosted by BepInEx (MonoMod / BepInEx handles hooking).
         private static unsafe void NativeHookAttach(nint* target, nint detour) { }
