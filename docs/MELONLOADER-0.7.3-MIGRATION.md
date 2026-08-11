@@ -79,7 +79,7 @@
 - ✅ **IronNest Coop 2.1.0**（BepInEx 插件）：65 方法 Harmony 补丁正常，与 ML mod 共存
 - ✅ F9 热重载 Logic 正常
 
-**为让 ML mod 在 BepInEx 6 下真正工作，依次解决的关键问题（v2.2.3 → v2.3.0）**：
+**为让 ML mod 在 BepInEx 6 下真正工作，依次解决的关键问题（v2.2.3 → v2.3.2）**：
 
 1. **v2.2.3 — 游戏循环事件由插件侧驱动**
    官方 SupportModule 在 BepInEx 托管下不交付游戏循环事件（SM_Component 的 GameObject 非根对象，`DontDestroyOnLoad` 警告）。改为宿主插件创建 MonoBehaviour 驱动：
@@ -108,6 +108,12 @@
 
 8. **v2.3.0 — 嵌套 IEnumerator 协程支持**
    IronNestFCS 开火管线 `yield return CoroutineLock.Acquire()` / `GunSystem.LoadBullet()/SelectPowder()/LoadPowder()/SetElevation()/WaitFire()/WaitBackToIdle()` 全是**嵌套 IEnumerator**（返回 IEnumerator 的方法）。旧实现跳过嵌套协程 → 装弹/装药/调仰角/等开火全没执行 → **T1 不开火**。改为**栈式**执行：`current is IEnumerator` 时压栈跑完子协程再继续外层。此后 T1 开火正常。
+
+9. **v2.3.1 — 退出流程事件交付**
+   SupportModule 的 Quit 钩子在 BepInEx 托管下不触发 → mod 收不到 `OnApplicationQuit`/`OnApplicationDefiniteQuit`，`Core.Quit()` 清理（存偏好/解绑 Harmony/断开 bHaptics）不执行。在宿主驱动的 `OnApplicationQuit()` 中调用 `BepInExHost.InvokeOnApplicationQuit()` + `InvokeOnApplicationDefiniteQuit()`（→ `Core.Quit()`）。
+
+10. **v2.3.2 — Harmony 注解 blob 改写**
+    `[HarmonyPatch(typeof(Il2Cpp.EntityLocation), "Method")]` 里的 `typeof(...)` 被编译器编码进 **CustomAttribute blob**（不是元数据 TypeRef），`GetTypeReferences()` 看不到 → Harmony 读注解抛 `TypeLoadException: Could not load type 'Il2Cpp.EntityLocation' from assembly 'Assembly-CSharp'` → patch 全部失效 → mod 初始化中断（cfg 不生成）。修复：`RewriteModule` 遍历每个类型/方法/字段/属性/事件的 `CustomAttributes`，改写构造参数、命名参数里的 `typeof(游戏类型)` 类型引用（递归处理数组）；`RewriteTypeReference` 兼容 Mono.Cecil fallback 解码的 `ModuleReference` scope。类级与方法级注解均已覆盖（合成端到端验证：真实 `MelonLoader.dll` 反射调用 `RewriteIfNeeded`，`Il2Cpp.EntityLocation` → `EntityLocation`）。
 
 ### ⚠️ net35 (UnityMono) 尚未实测
 - `SupportModule.Setup()`（Mono.dll）、`MelonFolderHandler`、Harmony patch 的 Mono 路径待 Unity Mono 游戏测试

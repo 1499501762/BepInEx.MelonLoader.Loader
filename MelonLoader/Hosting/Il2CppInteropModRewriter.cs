@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Mono.Cecil;
+using Mono.Collections.Generic;
 
 namespace MelonLoader.Hosting
 {
@@ -93,6 +94,102 @@ namespace MelonLoader.Hosting
                     changed = true;
             }
 
+            // typeof(GameType) used inside a custom attribute (e.g. Harmony's
+            // [HarmonyPatch(typeof(Il2Cpp.EntityLocation), "Method")]) is stored in the
+            // attribute blob, not as a metadata TypeRef, so GetTypeReferences() never
+            // sees it. Without this, Harmony throws TypeLoadException when it reads the
+            // patch annotations and the mod's patches silently never apply. Harmony
+            // annotations can live on a type, a method, a field, a property or an event,
+            // so all of those attribute collections are visited.
+            foreach (var type in module.GetTypes())
+            {
+                changed |= RewriteMemberAttributes(type.CustomAttributes);
+                foreach (var m in type.Methods)
+                    changed |= RewriteMemberAttributes(m.CustomAttributes);
+                foreach (var f in type.Fields)
+                    changed |= RewriteMemberAttributes(f.CustomAttributes);
+                foreach (var p in type.Properties)
+                    changed |= RewriteMemberAttributes(p.CustomAttributes);
+                foreach (var e in type.Events)
+                    changed |= RewriteMemberAttributes(e.CustomAttributes);
+            }
+
+            return changed;
+        }
+
+        private static bool RewriteMemberAttributes(Collection<CustomAttribute> attributes)
+        {
+            bool changed = false;
+            foreach (var attr in attributes)
+            {
+                try
+                {
+                    if (RewriteCustomAttribute(attr))
+                        changed = true;
+                }
+                catch
+                {
+                    // Skip attributes we can't decode; member-reference rewrites still apply.
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool RewriteCustomAttribute(CustomAttribute attr)
+        {
+            bool changed = false;
+
+            // The attribute type itself may be a game type in rare cases.
+            if (RewriteTypeReference(attr.AttributeType))
+                changed = true;
+
+            // Constructor arguments - e.g. [HarmonyPatch(typeof(Il2Cpp.EntityLocation), "X")].
+            foreach (var arg in attr.ConstructorArguments)
+            {
+                if (RewriteAttributeArgument(arg))
+                    changed = true;
+            }
+
+            // Named arguments - e.g. [X(GameType = typeof(Il2Cpp.Y))].
+            foreach (var named in attr.Properties)
+            {
+                if (RewriteAttributeArgument(named.Argument))
+                    changed = true;
+            }
+
+            foreach (var named in attr.Fields)
+            {
+                if (RewriteAttributeArgument(named.Argument))
+                    changed = true;
+            }
+
+            return changed;
+        }
+
+        private static bool RewriteAttributeArgument(CustomAttributeArgument arg)
+        {
+            bool changed = false;
+
+            if (arg.Value is TypeReference typeRef)
+            {
+                if (RewriteTypeReference(typeRef))
+                    changed = true;
+            }
+            else if (arg.Value is CustomAttributeArgument nested)
+            {
+                if (RewriteAttributeArgument(nested))
+                    changed = true;
+            }
+            else if (arg.Value is CustomAttributeArgument[] array)
+            {
+                foreach (var element in array)
+                {
+                    if (RewriteAttributeArgument(element))
+                        changed = true;
+                }
+            }
+
             return changed;
         }
 
@@ -105,10 +202,17 @@ namespace MelonLoader.Hosting
             if (tr.DeclaringType != null)
                 return RewriteTypeReference(tr.DeclaringType);
 
-            if (!(tr.Scope is AssemblyNameReference scope))
+            // Attribute-blob references (fallback-decoded by Mono.Cecil) can use a
+            // ModuleReference scope instead of an AssemblyNameReference; accept both.
+            // Assembly-scope references also get their "Il2Cpp" assembly-name prefix
+            // stripped (Il2CppFMODUnity -> FMODUnity) to match BepInEx's interop naming.
+            string scopeName;
+            if (tr.Scope is AssemblyNameReference)
+                scopeName = ((AssemblyNameReference)tr.Scope).Name;
+            else if (tr.Scope is ModuleReference)
+                scopeName = ((ModuleReference)tr.Scope).Name;
+            else
                 return false;
-
-            string scopeName = scope.Name;
 
             // Framework assemblies legitimately start with "Il2Cpp" and are identical in
             // both interop sets - never touch them.
@@ -128,9 +232,9 @@ namespace MelonLoader.Hosting
 
             // Strip the "Il2Cpp" prefix from the referenced assembly name
             // (e.g. Il2CppFMODUnity -> FMODUnity) to match BepInEx's interop naming.
-            if (scopeName.StartsWith("Il2Cpp", StringComparison.Ordinal))
+            if (tr.Scope is AssemblyNameReference asm && scopeName.StartsWith("Il2Cpp", StringComparison.Ordinal))
             {
-                scope.Name = scopeName.Substring(6);
+                asm.Name = scopeName.Substring(6);
                 changed = true;
             }
 
