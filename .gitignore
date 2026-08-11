@@ -360,3 +360,6 @@ Output
 
 # Nuke build root marker + generated artifacts
 .nuke/
+
+# Reference
+ref/

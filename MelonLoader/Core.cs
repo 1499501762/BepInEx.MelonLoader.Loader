@@ -231,6 +231,12 @@ namespace MelonLoader
             RegisterTypeInIl2CppWithInterfaces.SetReady();
 #endif
 
+            // ROOT-CAUSE FIX: The SupportModule re-created Il2CppInteropRuntime with
+            // MelonDetourProvider (BootstrapInterop-based, broken under BepInEx). Swap back
+            // to BepInEx's Dobby-based Il2CppInteropDetourProvider before mods HarmonyInit.
+            if (Hosting.BepInExHost.IsActive)
+                Hosting.BepInExHost.ReconfigureDetourProvider();
+
             MelonDebug.Msg("Invoking MelonHarmonyInit");
             MelonEvents.MelonHarmonyInit.Invoke();
 

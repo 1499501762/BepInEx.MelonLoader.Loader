@@ -58,11 +58,9 @@ namespace MelonLoader.Hosting
             lib.NativeHookDetach = NativeHookDetach;
             BootstrapInterop.InitializeManaged(lib);
 
-            // Before MelonLoader loads anything, rewrite any assemblies under the MelonLoader
-            // folder that reference MelonLoader-style "Il2Cpp.*" game types so they bind to
-            // BepInEx's original-namespace interop. This covers assemblies a mod loads at
-            // runtime itself (e.g. hot-reloaded logic DLLs) that bypass the in-memory rewrite.
-            Il2CppInteropModRewriter.RewriteAllOnDisk(baseDirectory);
+            // Approach A: the game interop assembly ships with Il2Cpp.* alias types (the
+            // loader patcher adds them before the interop is loaded), so MelonLoader mods
+            // load verbatim. Do NOT rewrite mods on disk here.
 
             Core.Initialize();
         }
@@ -107,7 +105,75 @@ namespace MelonLoader.Hosting
             MelonEvents.OnApplicationLateStart.Invoke();
         }
 
+
+
+
         public static void InvokeUpdate() => MelonEvents.OnUpdate.Invoke();
+
+        /// <summary>
+        /// ROOT-CAUSE FIX: The MelonLoader SupportModule (Il2Cpp.dll) re-creates
+        /// Il2CppInteropRuntime with its own MelonDetourProvider, which relies on
+        /// BootstrapInterop.NativeHookAttachDirect. Under BepInEx hosting the native
+        /// BootstrapInterop host is not available, so those detours silently do nothing
+        /// (method entry machine code is never patched) and Harmony's Il2CppDetourMethodPatcher
+        /// never intercepts game calls. This re-creates Il2CppInteropRuntime using BepInEx's
+        /// Il2CppInteropDetourProvider (Dobby-based, works under BepInEx) so Il2Cpp detours
+        /// actually install. Called after SupportModule.Setup() and before MelonHarmonyInit.
+        /// </summary>
+        public static void ReconfigureDetourProvider()
+        {
+            try
+            {
+                var i2c = (System.Reflection.Assembly)null;
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+                    if (a.GetName().Name == "Il2CppInterop.Runtime") { i2c = a; break; }
+                if (i2c == null) return;
+
+                var runtimeType = i2c.GetType("Il2CppInterop.Runtime.Startup.Il2CppInteropRuntime");
+                var cfgType = i2c.GetType("Il2CppInterop.Runtime.Startup.RuntimeConfiguration");
+                if (runtimeType == null || cfgType == null) return;
+
+                // 当前 Instance 的 UnityVersion
+                var instProp = runtimeType.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                var oldInst = instProp.GetValue(null, null);
+                object unityVersion = null;
+                if (oldInst != null)
+                {
+                    var uvProp = runtimeType.GetProperty("UnityVersion", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    unityVersion = uvProp.GetValue(oldInst, null);
+                }
+
+                // BepInEx 的 Il2CppInteropDetourProvider（Dobby）
+                var bepAsm = (System.Reflection.Assembly)null;
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+                    if (a.GetName().Name == "BepInEx.Unity.IL2CPP") { bepAsm = a; break; }
+                object detourProvider = null;
+                if (bepAsm != null)
+                {
+                    var dpType = bepAsm.GetType("BepInEx.Unity.IL2CPP.Hook.Il2CppInteropDetourProvider");
+                    if (dpType != null) detourProvider = Activator.CreateInstance(dpType, true);
+                }
+                if (detourProvider == null) return;
+
+                var cfg = Activator.CreateInstance(cfgType, true);
+                var dpProp = cfgType.GetProperty("DetourProvider");
+                if (dpProp != null) dpProp.SetValue(cfg, detourProvider, null);
+                if (unityVersion != null)
+                {
+                    var uvProp = cfgType.GetProperty("UnityVersion");
+                    if (uvProp != null) uvProp.SetValue(cfg, unityVersion, null);
+                }
+
+                var create = runtimeType.GetMethod("Create", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, new[] { cfgType }, null);
+                if (create == null) return;
+                create.Invoke(null, new object[] { cfg });
+            }
+            catch
+            {
+            }
+        }
+
         public static void InvokeFixedUpdate() => MelonEvents.OnFixedUpdate.Invoke();
         public static void InvokeLateUpdate() => MelonEvents.OnLateUpdate.Invoke();
         public static void InvokeOnGUI() => MelonEvents.OnGUI.Invoke();
