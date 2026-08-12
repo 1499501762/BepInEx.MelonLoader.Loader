@@ -115,6 +115,15 @@
 10. **v2.3.2 — Harmony 注解 blob 改写**
     `[HarmonyPatch(typeof(Il2Cpp.EntityLocation), "Method")]` 里的 `typeof(...)` 被编译器编码进 **CustomAttribute blob**（不是元数据 TypeRef），`GetTypeReferences()` 看不到 → Harmony 读注解抛 `TypeLoadException: Could not load type 'Il2Cpp.EntityLocation' from assembly 'Assembly-CSharp'` → patch 全部失效 → mod 初始化中断（cfg 不生成）。修复：`RewriteModule` 遍历每个类型/方法/字段/属性/事件的 `CustomAttributes`，改写构造参数、命名参数里的 `typeof(游戏类型)` 类型引用（递归处理数组）；`RewriteTypeReference` 兼容 Mono.Cecil fallback 解码的 `ModuleReference` scope。类级与方法级注解均已覆盖（合成端到端验证：真实 `MelonLoader.dll` 反射调用 `RewriteIfNeeded`，`Il2Cpp.EntityLocation` → `EntityLocation`）。
 
+11. **v2.3.3 — 发布 zip 全新部署与 Il2Cpp.* mod 的 interop 兼容（根因，约束：不改写 mod）**
+    `v2.3.3` 采用 **Approach A**（mod 原样加载、**绝不改写 mod**），前提是运行时 interop（`BepInEx\interop\Assembly-CSharp.dll`）**自带 `Il2Cpp.*` 别名类型**。验证环境靠**手动**运行外部 `DnlibAliasGen` 工具把别名 interop 覆盖进 `BepInEx\interop\` 才通过；但**发布 zip（build.ps1 产物）不含 interop，也没有生成别名的自动化步骤** → 全新部署时 BepInEx 6 preloader 用 Cpp2IL 生成**原始命名空间** interop，原始 MelonLoader mod（Harmony `typeof(Il2Cpp.X)` / 直接 TypeRef 引用 `Il2Cpp.*`）解析失败 → `TypeLoadException: Could not load type 'Il2Cpp...' from assembly 'Assembly-CSharp'` → mod 失效。
+    **已确认事实**：
+    - 发布 zip 的 `MelonLoader.dll`（插件目录）与验证环境 SHA 完全一致（`1ECF15E9`，含 v2.3.3 DetourProvider 修复）。
+    - `MLLoader\MelonLoader\Dependencies`（含 `SupportModules\Il2Cpp.dll`）与官方下载一致，`SupportModule` hash `SAME=True`。
+    - 发布 zip 的 `MLLoader\MelonLoader\` 只有 `Dependencies`；验证环境多出的 `Il2CppAssemblies\`（MelonLoader 生成器输出）与 `MelonLoader.dll`（旧残留）在 BepInEx 托管下**不是**核心加载路径（核心从插件目录加载），官方 zip 的 `net6/net35/net472` 同样非必需。
+    - BepInEx 6 interop 在 preloader 阶段生成并经 `LoadAssemblyDirectories` 加载进默认 ALC，`PreloadInteropAssemblies` 在插件加载前用 `Assembly.Load(name)` 复用已加载程序集 → **patcher / 插件都无法在 interop 预加载前改写 interop 文件实现一次启动生效**。
+    **约束与方向**：用户明确**禁止以 rewrite 改写原本的 mod**。合法治本方向是把 `Il2Cpp.*` 别名生成整合进 loader（改 interop、不改 mod）——`BepInExHost.Initialize` 时检测 `BepInEx\interop\Assembly-CSharp.dll` 是否含 `Il2Cpp.*` 别名，若无则用 dnlib 注入别名（幂等），首次运行修复后需重启一次游戏使预加载使用别名版。
+
 ### ⚠️ net35 (UnityMono) 尚未实测
 - `SupportModule.Setup()`（Mono.dll）、`MelonFolderHandler`、Harmony patch 的 Mono 路径待 Unity Mono 游戏测试
 - 理论风险较低（net35 是 0.7.3 的成熟路径），驱动逻辑与 IL2CPP 版一致，但未实测
