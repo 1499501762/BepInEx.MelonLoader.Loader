@@ -81,13 +81,18 @@ namespace MelonLoader.Hosting
                 var gameRoot = Path.GetDirectoryName(baseDirectory);
                 if (string.IsNullOrEmpty(gameRoot))
                     return;
-                var interopPath = Path.Combine(gameRoot, "BepInEx", "interop", "Assembly-CSharp.dll");
-                if (!File.Exists(interopPath))
+                var interopDir = Path.Combine(gameRoot, "BepInEx", "interop");
+                if (!Directory.Exists(interopDir))
                     return;
 
+                // Scan everywhere a mod (or its hot-reloaded logic DLL, e.g.
+                // IronNestFCS\IronNestFCS.Logic.dll) may be installed so every
+                // Il2Cpp-prefixed reference (Il2Cpp.LookAtTarget, Il2CppTMPro.TMP_Text,
+                // ...) is covered regardless of which interop assembly it lives in.
                 var modsDir = Path.Combine(baseDirectory, "Mods");
                 var userLibsDir = Path.Combine(baseDirectory, "UserLibs");
-                if (Il2CppInteropAliasInjector.EnsureAliases(interopPath, modsDir, userLibsDir))
+                var userDataDir = Path.Combine(baseDirectory, "UserData");
+                if (Il2CppInteropAliasInjector.EnsureAliases(interopDir, modsDir, userLibsDir, userDataDir))
                     MelonLogger.Msg("[BepInExHost] Interop aliases installed - restart the game for them to take effect");
             }
             catch (Exception ex)

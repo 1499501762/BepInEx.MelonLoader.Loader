@@ -9,37 +9,34 @@ using dnlib.DotNet.Emit;
 namespace MelonLoader.Hosting
 {
     /// <summary>
-    /// Ensures the BepInEx game interop assembly ships <c>Il2Cpp.*</c> alias types so
-    /// MelonLoader mods (which reference Il2Cpp-prefixed game types in their TypeRefs and
-    /// Harmony attribute blobs) load <b>verbatim</b>, without ever rewriting the mods.
+    /// Ensures every BepInEx game interop assembly ships Il2Cpp-prefixed alias types so
+    /// MelonLoader mods load <b>verbatim</b> (never rewritten). MelonLoader's interop
+    /// prefixes each game type with "Il2Cpp" (e.g. <c>Il2Cpp.LookAtTarget</c> from
+    /// Assembly-CSharp, <c>Il2CppTMPro.TMP_Text</c> from Unity.TextMeshPro); BepInEx's
+    /// interop keeps original namespaces. This injector clones every game type the
+    /// installed mods reference into an "Il2Cpp"-prefixed namespace inside the matching
+    /// interop assembly.
     /// <para>
-    /// BepInEx 6's Il2CppInterop keeps the original namespaces (e.g. <c>EntityLocation</c>),
-    /// while MelonLoader mods are compiled against MelonLoader's interop which prefixes game
-    /// types with <c>Il2Cpp.</c>. This injector rewrites the interop assembly (not the mods)
-    /// by cloning every game type the installed mods reference into an <c>Il2Cpp.*</c>
-    /// namespace. Idempotent: if the interop already has the aliases it does nothing.
-    /// </para>
-    /// <para>
-    /// Because BepInEx preloads interop assemblies before plugins run, a freshly installed
-    /// alias interop takes effect on the next game launch. Callers should tell the user to
-    /// restart when <see cref="EnsureAliases"/> returns <c>true</c>.
+    /// Because BepInEx preloads interop assemblies before plugins run, a freshly
+    /// generated alias set takes effect on the next game launch (callers log a restart
+    /// hint when <see cref="EnsureAliases"/> returns <c>true</c>).
     /// </para>
     /// </summary>
     public static class Il2CppInteropAliasInjector
     {
         /// <summary>
-        /// Ensures <paramref name="interopPath"/> contains <c>Il2Cpp.*</c> aliases for every
-        /// game type referenced by the assemblies under <paramref name="modsDirs"/>.
-        /// Returns <c>true</c> if the file was rewritten (restart required to take effect).
+        /// Ensures every interop assembly under <paramref name="interopDir"/> contains
+        /// Il2Cpp-prefixed aliases for the game types referenced by the assemblies under
+        /// <paramref name="modsDirs"/>. Returns <c>true</c> if any file was rewritten.
         /// </summary>
-        public static bool EnsureAliases(string interopPath, params string[] modsDirs)
+        public static bool EnsureAliases(string interopDir, params string[] modsDirs)
         {
             try
             {
-                if (string.IsNullOrEmpty(interopPath) || !File.Exists(interopPath))
+                if (string.IsNullOrEmpty(interopDir) || !Directory.Exists(interopDir))
                     return false;
 
-                var gen = new AliasGenerator(interopPath);
+                var gen = new AliasGenerator(interopDir);
                 return gen.Run(modsDirs);
             }
             catch (Exception ex)
@@ -51,39 +48,55 @@ namespace MelonLoader.Hosting
 
         private sealed class AliasGenerator
         {
-            private readonly ModuleDefMD _mod;
-            private readonly string _interopPath;
+            private const char Sep = '\u0001'; // (assembly, typeFullName) key separator
+
+            // All loaded interop modules that we may add aliases to (assembly name -> module).
+            private readonly Dictionary<string, ModuleDefMD> _modulesByAsm = new(StringComparer.Ordinal);
+            // Global index: "asm\0full" -> TypeDef.
             private readonly Dictionary<string, TypeDef> _origByFull = new();
-            private readonly Dictionary<string, TypeDef> _aliasByOrig = new();
             private readonly Dictionary<string, List<TypeDef>> _nestedByParent = new();
+            private readonly Dictionary<string, TypeDef> _aliasByOrig = new();
+            private readonly HashSet<ModuleDefMD> _dirtyModules = new();
             private HashSet<string> _collected = new();
 
-            internal AliasGenerator(string interopPath)
+            internal AliasGenerator(string interopDir)
             {
-                _interopPath = interopPath;
-                _mod = ModuleDefMD.Load(interopPath);
+                foreach (var file in Directory.GetFiles(interopDir, "*.dll", SearchOption.TopDirectoryOnly))
+                {
+                    var asmName = Path.GetFileNameWithoutExtension(file);
+                    if (IsFrameworkAssembly(asmName))
+                        continue;
+                    try
+                    {
+                        var m = ModuleDefMD.Load(file);
+                        var name = m.Assembly?.Name?.String ?? asmName;
+                        _modulesByAsm[name] = m;
+                        foreach (var t in m.GetTypes())
+                        {
+                            var key = Key(name, t.FullName);
+                            _origByFull[key] = t;
+                            if (t.IsNested && t.DeclaringType != null)
+                            {
+                                var pkey = Key(name, t.DeclaringType.FullName);
+                                if (!_nestedByParent.TryGetValue(pkey, out var l))
+                                    _nestedByParent[pkey] = l = new List<TypeDef>();
+                                l.Add(t);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // skip modules we cannot read
+                    }
+                }
             }
 
             internal bool Run(IReadOnlyList<string> modsDirs)
             {
-                // Note: always regenerate from the CURRENT installed mods, so that adding
-                // a new mod (which may reference game types not aliased before) is picked
-                // up on the next launch. Regeneration is idempotent; if the alias set is
-                // unchanged the rewritten file is identical in content.
+                if (_modulesByAsm.Count == 0)
+                    return false;
 
-                // Index original types + nesting.
-                foreach (var t in _mod.GetTypes())
-                {
-                    _origByFull[t.FullName] = t;
-                    if (t.IsNested && t.DeclaringType != null)
-                    {
-                        if (!_nestedByParent.TryGetValue(t.DeclaringType.FullName, out var l))
-                            _nestedByParent[t.DeclaringType.FullName] = l = new List<TypeDef>();
-                        l.Add(t);
-                    }
-                }
-
-                // Collect game-type references from the installed mods.
+                // 1) Seed collection: every Il2Cpp-prefixed type reference found in the mods.
                 var seeds = new HashSet<string>();
                 if (modsDirs != null)
                     foreach (var dir in modsDirs)
@@ -91,40 +104,42 @@ namespace MelonLoader.Hosting
                 if (seeds.Count == 0)
                     return false;
 
-                // Closure collection (read-only).
+                // 2) Closure over referenced game types.
                 _collected = new HashSet<string>();
                 foreach (var s in seeds)
-                {
                     if (_origByFull.TryGetValue(s, out var td))
                         CollectType(td);
-                }
 
-                // Clone collected types into Il2Cpp.* aliases.
+                // 3) Clone collected types into aliases (per owning module).
                 foreach (var full in _collected.OrderBy(x => x))
-                {
                     if (_origByFull.TryGetValue(full, out var td))
                         EnsureAlias(td);
-                }
                 if (_aliasByOrig.Count == 0)
                     return false;
 
-                // Write to a temp file first: _mod was memory-mapped from _interopPath,
-                // so writing back to the same file is blocked by the mapping.
-                var tmpPath = _interopPath + ".aliastmp" + Guid.NewGuid().ToString("N");
-                try
+                // 4) Write back each modified module via temp file + move (the module is
+                //    memory-mapped from its path, so writing in place would fail).
+                foreach (var m in _dirtyModules)
                 {
-                    _mod.Write(tmpPath);
-                    File.Move(tmpPath, _interopPath, true);
-                }
-                finally
-                {
-                    if (File.Exists(tmpPath))
-                        File.Delete(tmpPath);
+                    var origPath = m.Location;
+                    if (string.IsNullOrEmpty(origPath) || !File.Exists(origPath))
+                        continue;
+                    var tmp = origPath + ".aliastmp" + Guid.NewGuid().ToString("N");
+                    try
+                    {
+                        m.Write(tmp);
+                        File.Move(tmp, origPath, true);
+                    }
+                    finally
+                    {
+                        if (File.Exists(tmp))
+                            File.Delete(tmp);
+                    }
                 }
                 return true;
             }
 
-            // ---- seed collection from mod assemblies ----
+            // ---- seed collection ----
             private void CollectFromMods(HashSet<string> names, string dir)
             {
                 try
@@ -137,8 +152,7 @@ namespace MelonLoader.Hosting
                         {
                             var md = ModuleDefMD.Load(file);
                             foreach (var tr in md.GetTypeRefs())
-                                if (IsGameType(tr))
-                                    names.Add(ToOrigFullName(tr));
+                                CollectSeed(names, tr);
                             foreach (var t in md.GetTypes())
                             {
                                 CollectAttrs(names, t.CustomAttributes);
@@ -150,6 +164,19 @@ namespace MelonLoader.Hosting
                     }
                 }
                 catch { }
+            }
+
+            private void CollectSeed(HashSet<string> names, ITypeDefOrRef tr)
+            {
+                if (tr == null)
+                    return;
+                var ns = (string)tr.Namespace ?? "";
+                if (!ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
+                    return;
+                var asm = GetScopeAssembly(tr);
+                if (asm == null || !_modulesByAsm.ContainsKey(asm))
+                    return;
+                names.Add(Key(asm, ToOrigFullName(tr)));
             }
 
             private void CollectAttrs(HashSet<string> names, IList<CustomAttribute> attrs)
@@ -168,10 +195,7 @@ namespace MelonLoader.Hosting
             private void CollectArg(HashSet<string> names, CAArgument arg)
             {
                 if (arg.Type != null && arg.Type.FullName == "System.Type" && arg.Value is ITypeDefOrRef tr)
-                {
-                    if (IsGameType(tr))
-                        names.Add(ToOrigFullName(tr));
-                }
+                    CollectSeed(names, tr);
                 else if (arg.Value is CAArgument nested) CollectArg(names, nested);
                 else if (arg.Value is IList<CAArgument> arr)
                     foreach (var e in arr) CollectArg(names, e);
@@ -180,74 +204,75 @@ namespace MelonLoader.Hosting
             // ---- closure collection ----
             private void CollectType(TypeDef td)
             {
-                var full = td.FullName;
-                if (!_collected.Add(full)) return;
-                if (td.BaseType != null) CollectTypeRef(td.BaseType);
-                foreach (var i in td.Interfaces) CollectTypeRef(i.Interface);
+                var asm = GetTypeAsm(td);
+                if (asm == null) return;
+                var key = Key(asm, td.FullName);
+                if (!_collected.Add(key)) return;
+
+                if (td.BaseType != null) CollectTypeRef(asm, td.BaseType);
+                foreach (var i in td.Interfaces) CollectTypeRef(asm, i.Interface);
                 foreach (var gp in td.GenericParameters)
-                    foreach (var c in gp.GenericParamConstraints) CollectTypeRef(c.Constraint);
-                foreach (var f in td.Fields) CollectTypeRef(f.FieldType);
+                    foreach (var c in gp.GenericParamConstraints) CollectTypeRef(asm, c.Constraint);
+                foreach (var f in td.Fields) CollectTypeRef(asm, f.FieldType);
                 foreach (var m in td.Methods)
                 {
-                    CollectTypeRef(m.ReturnType);
-                    foreach (var p in m.Parameters) CollectTypeRef(p.Type);
+                    CollectTypeRef(asm, m.ReturnType);
+                    foreach (var p in m.Parameters) CollectTypeRef(asm, p.Type);
                     foreach (var gp in m.GenericParameters)
-                        foreach (var c in gp.GenericParamConstraints) CollectTypeRef(c.Constraint);
+                        foreach (var c in gp.GenericParamConstraints) CollectTypeRef(asm, c.Constraint);
                     if (m.HasBody)
                     {
-                        foreach (var v in m.Body.Variables) CollectTypeRef(v.Type);
-                        foreach (var ins in m.Body.Instructions) CollectOperand(ins.Operand);
+                        foreach (var v in m.Body.Variables) CollectTypeRef(asm, v.Type);
+                        foreach (var ins in m.Body.Instructions) CollectOperand(asm, ins.Operand);
                     }
                 }
-                if (_nestedByParent.TryGetValue(full, out var nts))
+                if (_nestedByParent.TryGetValue(key, out var nts))
                     foreach (var nt in nts) CollectType(nt);
             }
 
-            private void CollectTypeRef(ITypeDefOrRef t)
+            private void CollectTypeRef(string asm, ITypeDefOrRef t)
             {
                 if (t == null) return;
-                if (t is TypeSpec ts2) { CollectTypeRef(ts2.TypeSig); return; }
+                if (t is TypeSpec ts2) { CollectTypeRef(asm, ts2.TypeSig); return; }
                 if (t is GenericSig) return;
-                if (IsGameType(t))
-                {
-                    var full = ToOrigFullName(t);
-                    if (_origByFull.TryGetValue(full, out var td))
-                        CollectType(td);
-                }
+                var tasm = GetTypeAsm(t) ?? asm;
+                var key = Key(tasm, ToOrigFullName(t));
+                if (_origByFull.TryGetValue(key, out var td))
+                    CollectType(td);
             }
 
-            private void CollectTypeRef(TypeSig ts)
+            private void CollectTypeRef(string asm, TypeSig ts)
             {
                 if (ts == null) return;
                 switch (ts)
                 {
-                    case ClassOrValueTypeSig covt: CollectTypeRef(covt.TypeDefOrRef); break;
+                    case ClassOrValueTypeSig covt: CollectTypeRef(asm, covt.TypeDefOrRef); break;
                     case GenericInstSig gis:
-                        CollectTypeRef(gis.GenericType);
-                        foreach (var ga in gis.GenericArguments) CollectTypeRef(ga);
+                        CollectTypeRef(asm, gis.GenericType);
+                        foreach (var ga in gis.GenericArguments) CollectTypeRef(asm, ga);
                         break;
-                    case SZArraySig sa: CollectTypeRef(sa.Next); break;
-                    case ArraySig arr: CollectTypeRef(arr.Next); break;
-                    case PtrSig pt: CollectTypeRef(pt.Next); break;
-                    case ByRefSig br: CollectTypeRef(br.Next); break;
-                    case PinnedSig pn: CollectTypeRef(pn.Next); break;
+                    case SZArraySig sa: CollectTypeRef(asm, sa.Next); break;
+                    case ArraySig arr: CollectTypeRef(asm, arr.Next); break;
+                    case PtrSig pt: CollectTypeRef(asm, pt.Next); break;
+                    case ByRefSig br: CollectTypeRef(asm, br.Next); break;
+                    case PinnedSig pn: CollectTypeRef(asm, pn.Next); break;
                 }
             }
 
-            private void CollectOperand(object op)
+            private void CollectOperand(string asm, object op)
             {
                 switch (op)
                 {
                     case IMethod m:
-                        CollectTypeRef(m.DeclaringType.ToTypeSig());
+                        CollectTypeRef(asm, m.DeclaringType.ToTypeSig());
                         if (m is MethodSpec ms && ms.GenericInstMethodSig != null)
-                            foreach (var ga in ms.GenericInstMethodSig.GenericArguments) CollectTypeRef(ga);
+                            foreach (var ga in ms.GenericInstMethodSig.GenericArguments) CollectTypeRef(asm, ga);
                         break;
                     case IField f:
-                        CollectTypeRef(f.DeclaringType.ToTypeSig());
+                        CollectTypeRef(asm, f.DeclaringType.ToTypeSig());
                         break;
                     case ITypeDefOrRef t:
-                        CollectTypeRef(t.ToTypeSig());
+                        CollectTypeRef(asm, t.ToTypeSig());
                         break;
                 }
             }
@@ -255,7 +280,11 @@ namespace MelonLoader.Hosting
             // ---- alias creation ----
             private TypeDef EnsureAlias(TypeDef orig)
             {
-                if (_aliasByOrig.TryGetValue(orig.FullName, out var existing))
+                var asm = GetTypeAsm(orig);
+                if (asm == null || !_modulesByAsm.TryGetValue(asm, out var mod))
+                    return orig;
+                var key = Key(asm, orig.FullName);
+                if (_aliasByOrig.TryGetValue(key, out var existing))
                     return existing;
 
                 TypeDef alias;
@@ -268,53 +297,49 @@ namespace MelonLoader.Hosting
                 }
                 else
                 {
-                    alias = new TypeDefUser("Il2Cpp", orig.Name);
+                    var origNs = (string)orig.Namespace ?? "";
+                    alias = new TypeDefUser("Il2Cpp" + origNs, orig.Name);
                     alias.Attributes = orig.Attributes;
-                    _mod.Types.Add(alias);
+                    mod.Types.Add(alias);
+                    _dirtyModules.Add(mod);
                 }
-                _aliasByOrig[orig.FullName] = alias;
-                CloneRecursive(orig, alias);
+                _aliasByOrig[key] = alias;
+                CloneRecursive(orig, alias, mod);
                 return alias;
             }
 
-            private void CloneRecursive(TypeDef orig, TypeDef alias)
+            private void CloneRecursive(TypeDef orig, TypeDef alias, ModuleDefMD mod)
             {
                 if (orig.BaseType != null)
-                    alias.BaseType = MapType(orig.BaseType);
+                    alias.BaseType = MapType(mod, orig.BaseType);
                 foreach (var i in orig.Interfaces)
-                    alias.Interfaces.Add(new InterfaceImplUser(MapType(i.Interface)));
+                    alias.Interfaces.Add(new InterfaceImplUser(MapType(mod, i.Interface)));
                 foreach (var gp in orig.GenericParameters)
                 {
                     var ngp = new GenericParamUser(gp.Number, gp.Flags, gp.Name);
                     foreach (var c in gp.GenericParamConstraints)
-                        ngp.GenericParamConstraints.Add(new GenericParamConstraintUser(MapType(c.Constraint)));
+                        ngp.GenericParamConstraints.Add(new GenericParamConstraintUser(MapType(mod, c.Constraint)));
                     alias.GenericParameters.Add(ngp);
                 }
                 foreach (var f in orig.Fields)
                 {
-                    var nf = new FieldDefUser(f.Name, new FieldSig(MapType(f.FieldType)), f.Attributes);
+                    var nf = new FieldDefUser(f.Name, new FieldSig(MapType(mod, f.FieldType)), f.Attributes);
                     if (f.HasConstant) nf.Constant = f.Constant;
                     alias.Fields.Add(nf);
                 }
                 foreach (var m in orig.Methods)
                 {
-                    try
-                    {
-                        alias.Methods.Add(CreateMethodClone(m));
-                    }
-                    catch
-                    {
-                        // skip a method we can't clone (bad signature etc.)
-                    }
+                    try { alias.Methods.Add(CreateMethodClone(mod, m)); }
+                    catch { /* skip methods we can't clone */ }
                 }
-                if (_nestedByParent.TryGetValue(orig.FullName, out var nts))
+                if (_nestedByParent.TryGetValue(Key(GetTypeAsm(orig), orig.FullName), out var nts))
                     foreach (var nt in nts)
                         EnsureAlias(nt);
             }
 
-            private MethodDef CreateMethodClone(MethodDef m)
+            private MethodDef CreateMethodClone(ModuleDefMD mod, MethodDef m)
             {
-                var ret = MapType(m.ReturnType);
+                var ret = MapType(mod, m.ReturnType);
                 MethodSig sig;
                 if (m.IsStatic)
                     sig = MethodSig.CreateStatic(ret);
@@ -331,28 +356,27 @@ namespace MelonLoader.Hosting
                 {
                     var ngp = new GenericParamUser(gp.Number, gp.Flags, gp.Name);
                     foreach (var c in gp.GenericParamConstraints)
-                        ngp.GenericParamConstraints.Add(new GenericParamConstraintUser(MapType(c.Constraint)));
+                        ngp.GenericParamConstraints.Add(new GenericParamConstraintUser(MapType(mod, c.Constraint)));
                     nm.GenericParameters.Add(ngp);
                 }
                 foreach (var p in m.Parameters)
                 {
                     if (p.Index == 0 && !m.IsStatic) continue;
-                    var pdef = new ParamDefUser();
-                    pdef.Name = p.Name;
+                    var pdef = new ParamDefUser { Name = p.Name };
                     pdef.Sequence = (ushort)(nm.ParamDefs.Count + 1);
                     nm.ParamDefs.Add(pdef);
-                    sig.Params.Add(MapType(p.Type));
+                    sig.Params.Add(MapType(mod, p.Type));
                 }
                 if (m.HasBody)
-                    nm.Body = CloneBody(m, nm);
+                    nm.Body = CloneBody(mod, m, nm);
                 return nm;
             }
 
-            private CilBody CloneBody(MethodDef m, MethodDef dst)
+            private CilBody CloneBody(ModuleDefMD mod, MethodDef m, MethodDef dst)
             {
                 var body = new CilBody();
                 foreach (var v in m.Body.Variables)
-                    body.Variables.Add(new Local(MapType(v.Type)));
+                    body.Variables.Add(new Local(MapType(mod, v.Type)));
                 var map = new Dictionary<Instruction, Instruction>();
                 foreach (var ins in m.Body.Instructions)
                 {
@@ -361,7 +385,7 @@ namespace MelonLoader.Hosting
                     body.Instructions.Add(ni);
                 }
                 foreach (var ins in m.Body.Instructions)
-                    map[ins].Operand = MapOperand(ins.Operand, map);
+                    map[ins].Operand = MapOperand(mod, ins.Operand, map);
                 foreach (var eh in m.Body.ExceptionHandlers)
                 {
                     var neh = new ExceptionHandler(eh.HandlerType);
@@ -369,7 +393,7 @@ namespace MelonLoader.Hosting
                     if (eh.TryEnd != null) neh.TryEnd = map[eh.TryEnd];
                     if (eh.HandlerStart != null) neh.HandlerStart = map[eh.HandlerStart];
                     if (eh.HandlerEnd != null) neh.HandlerEnd = map[eh.HandlerEnd];
-                    if (eh.CatchType != null) neh.CatchType = MapType(eh.CatchType);
+                    if (eh.CatchType != null) neh.CatchType = MapType(mod, eh.CatchType);
                     if (eh.FilterStart != null) neh.FilterStart = map[eh.FilterStart];
                     body.ExceptionHandlers.Add(neh);
                 }
@@ -379,7 +403,7 @@ namespace MelonLoader.Hosting
                 return body;
             }
 
-            private object MapOperand(object op, Dictionary<Instruction, Instruction> map)
+            private object MapOperand(ModuleDefMD mod, object op, Dictionary<Instruction, Instruction> map)
             {
                 switch (op)
                 {
@@ -389,23 +413,23 @@ namespace MelonLoader.Hosting
                     case IList<Instruction> targets:
                         return targets.Select(t => map[t]).ToList();
                     case MemberRef mr:
-                        return mr.Signature is FieldSig ? (object)MapField(mr) : MapMethod(mr);
-                    case FieldDef fd: return MapField(fd);
-                    case MethodDef md: return MapMethod(md);
-                    case MethodSpec mspec: return MapMethod(mspec);
-                    case ITypeDefOrRef t: return MapType(t);
+                        return mr.Signature is FieldSig ? (object)MapField(mod, mr) : MapMethod(mod, mr);
+                    case FieldDef fd: return MapField(mod, fd);
+                    case MethodDef md: return MapMethod(mod, md);
+                    case MethodSpec mspec: return MapMethod(mod, mspec);
+                    case ITypeDefOrRef t: return MapType(mod, t);
                     default: return op;
                 }
             }
 
-            private IMethod MapMethod(IMethod m)
+            private IMethod MapMethod(ModuleDefMD mod, IMethod m)
             {
                 if (m is MethodDef md && md.DeclaringType == null)
                     return m;
                 var declType = m.DeclaringType;
                 // Non-game methods (Il2CppInterop.Runtime, System, UnityEngine, ...) stay as-is,
-                // but still map a MethodSpec's generic args so game-type container elements are aliased.
-                if (declType == null || !IsGameType(declType))
+                // but map a MethodSpec's generic args so game-type container elements are aliased.
+                if (declType == null || !IsAliasedType(declType))
                 {
                     if (m is MethodSpec mspec)
                     {
@@ -413,13 +437,13 @@ namespace MelonLoader.Hosting
                         bool changed = false;
                         foreach (var ga in mspec.GenericInstMethodSig.GenericArguments)
                         {
-                            var mapped = MapType(ga);
+                            var mapped = MapType(mod, ga);
                             mappedArgs.Add(mapped);
                             if (!ReferenceEquals(mapped, ga)) changed = true;
                         }
                         if (changed)
                         {
-                            var baseM = MapMethod(mspec.Method);
+                            var baseM = MapMethod(mod, mspec.Method);
                             var nms = new MethodSpecUser((IMethodDefOrRef)baseM);
                             nms.GenericInstMethodSig = new GenericInstMethodSig(mappedArgs.ToArray());
                             return nms;
@@ -427,37 +451,37 @@ namespace MelonLoader.Hosting
                     }
                     return m;
                 }
-                var decl = MapType(declType);
+                var decl = MapType(mod, declType);
                 if (m is MethodSpec ms)
                 {
-                    var baseMethod = MapMethod(ms.Method);
+                    var baseMethod = MapMethod(mod, ms.Method);
                     var nms = new MethodSpecUser((IMethodDefOrRef)baseMethod);
-                    nms.GenericInstMethodSig = new GenericInstMethodSig(ms.GenericInstMethodSig.GenericArguments.Select(ga => MapType(ga)).ToArray());
+                    nms.GenericInstMethodSig = new GenericInstMethodSig(ms.GenericInstMethodSig.GenericArguments.Select(ga => MapType(mod, ga)).ToArray());
                     return nms;
                 }
                 if (m is MethodDef md2)
                 {
-                    var sig = CreateMethodSigClone(md2);
-                    return new MemberRefUser(_mod, md2.Name, sig, decl);
+                    var sig = CreateMethodSigClone(mod, md2);
+                    return new MemberRefUser(mod, md2.Name, sig, decl);
                 }
                 if (m is MemberRef mref)
                 {
-                    var sig = CreateMethodSigClone(mref);
-                    return new MemberRefUser(_mod, mref.Name, sig, decl);
+                    var sig = CreateMethodSigClone(mod, mref);
+                    return new MemberRefUser(mod, mref.Name, sig, decl);
                 }
                 return m;
             }
 
-            private MethodSig CreateMethodSigClone(IMethod m)
+            private MethodSig CreateMethodSigClone(ModuleDefMD mod, IMethod m)
             {
                 var msig = m.MethodSig;
                 if (msig == null)
                 {
-                    var vs = MethodSig.CreateStatic(_mod.CorLibTypes.Void);
+                    var vs = MethodSig.CreateStatic(mod.CorLibTypes.Void);
                     vs.HasThis = false;
                     return vs;
                 }
-                var ret = MapType(msig.RetType);
+                var ret = MapType(mod, msig.RetType);
                 MethodSig sig = msig.GetCallingConvention() == CallingConvention.HasThis
                     ? MethodSig.CreateInstance(ret)
                     : MethodSig.CreateStatic(ret);
@@ -465,182 +489,193 @@ namespace MelonLoader.Hosting
                 sig.ExplicitThis = msig.ExplicitThis;
                 sig.CallingConvention = msig.CallingConvention;
                 foreach (var p in msig.Params)
-                    sig.Params.Add(MapType(p));
+                    sig.Params.Add(MapType(mod, p));
                 if (msig.ParamsAfterSentinel != null)
                     foreach (var p in msig.ParamsAfterSentinel)
-                        sig.ParamsAfterSentinel.Add(MapType(p));
+                        sig.ParamsAfterSentinel.Add(MapType(mod, p));
                 return sig;
             }
 
-            private IField MapField(IField f)
+            private IField MapField(ModuleDefMD mod, IField f)
             {
                 if (f is FieldDef fd && fd.DeclaringType == null)
                     return f;
                 var declType = f.DeclaringType;
-                if (declType == null || !IsGameType(declType))
+                if (declType == null || !IsAliasedType(declType))
                     return f;
-                var decl = MapType(declType);
-                var nfs = new FieldSig(MapType(f.FieldSig.Type));
-                return new MemberRefUser(_mod, f.Name, nfs, decl);
+                var decl = MapType(mod, declType);
+                var nfs = new FieldSig(MapType(mod, f.FieldSig.Type));
+                return new MemberRefUser(mod, f.Name, nfs, decl);
             }
 
-            // ---- type mapping: game types -> Il2Cpp-prefixed aliases ----
+            // ---- type mapping ----
             private int _mapDepth;
 
-            private ITypeDefOrRef MapType(ITypeDefOrRef t)
+            private ITypeDefOrRef MapType(ModuleDefMD mod, ITypeDefOrRef t)
             {
                 if (t == null) return null;
                 if (_mapDepth > 80) return t;
                 _mapDepth++;
-                try { return MapTypeCore(t); }
+                try { return MapTypeCore(mod, t); }
                 finally { _mapDepth--; }
             }
 
-            private ITypeDefOrRef MapTypeCore(ITypeDefOrRef t)
+            private ITypeDefOrRef MapTypeCore(ModuleDefMD mod, ITypeDefOrRef t)
             {
                 if (t is TypeSpec ts)
                 {
-                    var nts = MapType(ts.TypeSig);
+                    var nts = MapType(mod, ts.TypeSig);
                     if (ReferenceEquals(nts, ts.TypeSig)) return ts;
                     return new TypeSpecUser(nts);
                 }
                 if (t is TypeDef td)
                 {
+                    var asm = GetTypeAsm(td);
+                    var key = asm == null ? null : Key(asm, td.FullName);
                     if (td.IsNested && td.DeclaringType != null)
                     {
-                        var tkey = ToOrigFullName(td);
-                        if (_aliasByOrig.TryGetValue(tkey, out var aliasN))
+                        if (key != null && _aliasByOrig.TryGetValue(key, out var aliasN))
                             return aliasN;
-                        return EnsureAlias(td);
+                        if (key != null && _origByFull.ContainsKey(key))
+                            return EnsureAlias(td);
+                        return td;
                     }
-                    if (IsGameType(td))
-                    {
-                        if (_aliasByOrig.TryGetValue(td.FullName, out var alias))
-                            return alias;
-                        return new TypeRefUser(_mod, "Il2Cpp" + td.Namespace, td.Name, _mod.GetAssemblyRef("Assembly-CSharp"));
-                    }
+                    if (key != null && _aliasByOrig.TryGetValue(key, out var alias))
+                        return alias;
+                    // Not aliased: keep the original TypeDef reference.
                     return td;
                 }
                 if (t is TypeRef tr)
                 {
-                    if (tr.IsNested && tr.DeclaringType != null)
+                    var asm = GetScopeAssembly(tr);
+                    var origFull = ToOrigFullName(tr);
+                    if (asm != null)
                     {
-                        var full = ToOrigFullName(tr);
-                        if (_aliasByOrig.TryGetValue(full, out var aliasN))
-                            return aliasN;
-                        if (_origByFull.TryGetValue(full, out var td2))
-                            return EnsureAlias(td2);
-                        return MakeTypeRefChain(tr);
-                    }
-                    if (IsGameType(tr))
-                    {
-                        var full = ToOrigFullName(tr);
-                        if (_aliasByOrig.TryGetValue(full, out var alias))
+                        var key = Key(asm, origFull);
+                        if (_aliasByOrig.TryGetValue(key, out var alias))
                             return alias;
-                        return new TypeRefUser(_mod, "Il2Cpp" + tr.Namespace, tr.Name, _mod.GetAssemblyRef("Assembly-CSharp"));
+                        if (tr.IsNested && tr.DeclaringType != null)
+                        {
+                            if (_origByFull.TryGetValue(key, out var td2))
+                                return EnsureAlias(td2);
+                        }
+                        // Aliased game type not created yet: build an Il2Cpp-prefixed TypeRef
+                        // chain pointing at the target assembly (the alias TypeDef will exist
+                        // once that module is written).
+                        if (IsAliasedType(tr))
+                            return MakeIl2CppRefChain(mod, tr, asm);
                     }
                     return tr;
                 }
                 return t;
             }
 
-            private ITypeDefOrRef MakeTypeRefChain(ITypeDefOrRef t)
+            private ITypeDefOrRef MakeIl2CppRefChain(ModuleDefMD mod, ITypeDefOrRef t, string asm)
             {
                 if (t.DeclaringType != null)
                 {
-                    var parent = MakeTypeRefChain(t.DeclaringType);
-                    return new TypeRefUser(_mod, string.Empty, t.Name, parent as IResolutionScope);
+                    var parent = MakeIl2CppRefChain(mod, t.DeclaringType, asm);
+                    return new TypeRefUser(mod, string.Empty, t.Name, parent as IResolutionScope);
                 }
-                var ns = t.Namespace ?? "";
+                var ns = (string)t.Namespace ?? "";
                 if (ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
-                    ns = ns.Substring(6);
-                return new TypeRefUser(_mod, "Il2Cpp" + ns, t.Name, _mod.GetAssemblyRef("Assembly-CSharp"));
+                    ns = ns.Substring("Il2Cpp".Length);
+                return new TypeRefUser(mod, "Il2Cpp" + ns, t.Name, GetAssemblyRef(mod, asm));
             }
 
-            private TypeSig MapType(TypeSig ts)
+            private TypeSig MapType(ModuleDefMD mod, TypeSig ts)
             {
                 if (ts == null) return null;
                 if (_mapDepth > 80) return ts;
                 _mapDepth++;
-                try { return MapTypeCore(ts); }
+                try { return MapTypeCore(mod, ts); }
                 finally { _mapDepth--; }
             }
 
-            private TypeSig MapTypeCore(TypeSig ts)
+            private TypeSig MapTypeCore(ModuleDefMD mod, TypeSig ts)
             {
                 switch (ts)
                 {
                     case ClassOrValueTypeSig covt:
                     {
-                        var mapped = MapType(covt.TypeDefOrRef);
+                        var mapped = MapType(mod, covt.TypeDefOrRef);
                         if (ReferenceEquals(mapped, covt.TypeDefOrRef)) return ts;
                         return mapped.ToTypeSig();
                     }
                     case GenericInstSig gis:
                     {
-                        var nt = MapType(gis.GenericType) as ClassOrValueTypeSig ?? gis.GenericType;
+                        var nt = MapType(mod, gis.GenericType) as ClassOrValueTypeSig ?? gis.GenericType;
                         var n = new GenericInstSig(nt);
                         foreach (var ga in gis.GenericArguments)
-                            n.GenericArguments.Add(MapType(ga));
+                            n.GenericArguments.Add(MapType(mod, ga));
                         return n;
                     }
-                    case SZArraySig sa:
-                        return new SZArraySig(MapType(sa.Next));
-                    case ArraySig arr:
-                        return new ArraySig(MapType(arr.Next), arr.Rank);
-                    case PtrSig pt:
-                        return new PtrSig(MapType(pt.Next));
-                    case ByRefSig br:
-                        return new ByRefSig(MapType(br.Next));
-                    case PinnedSig pn:
-                        return new PinnedSig(MapType(pn.Next));
-                    default:
-                        return ts;
+                    case SZArraySig sa: return new SZArraySig(MapType(mod, sa.Next));
+                    case ArraySig arr: return new ArraySig(MapType(mod, arr.Next), arr.Rank);
+                    case PtrSig pt: return new PtrSig(MapType(mod, pt.Next));
+                    case ByRefSig br: return new ByRefSig(MapType(mod, br.Next));
+                    case PinnedSig pn: return new PinnedSig(MapType(mod, pn.Next));
+                    default: return ts;
                 }
             }
 
             // ---- helpers ----
-            private static bool IsGameType(ITypeDefOrRef tr)
-            {
-                if (tr == null) return false;
-                if (tr is TypeSpec) return true; // handled by caller via recursion
-                if (tr.DeclaringType != null)
-                    return IsGameType(tr.DeclaringType);
-                string scopeName;
-                if (tr is TypeDef td)
-                {
-                    if (td.Module == null) return false;
-                    scopeName = td.Module.Name;
-                }
-                else if (tr is TypeRef tref)
-                {
-                    if (tref.ResolutionScope is AssemblyRef ar)
-                        scopeName = ar.Name;
-                    else if (tref.ResolutionScope is ModuleDef mdo)
-                        scopeName = mdo.Name;
-                    else if (tref.ResolutionScope is ModuleRef mr)
-                        scopeName = mr.Name;
-                    else
-                        return false;
-                }
-                else return false;
+            private static string Key(string asm, string full) => asm + Sep + full;
 
-                if (scopeName == "Il2Cppmscorlib" || scopeName.StartsWith("Il2CppSystem", StringComparison.Ordinal) ||
-                    scopeName.StartsWith("Il2CppInterop", StringComparison.Ordinal) || scopeName.StartsWith("UnityEngine", StringComparison.Ordinal) ||
-                    scopeName.StartsWith("System", StringComparison.Ordinal) || scopeName.StartsWith("mscorlib", StringComparison.Ordinal) ||
-                    scopeName.StartsWith("netstandard", StringComparison.Ordinal) || scopeName.StartsWith("Mono", StringComparison.Ordinal))
-                    return false;
-                return scopeName.StartsWith("Assembly-CSharp", StringComparison.Ordinal) || scopeName == "Assembly-CSharp-firstpass";
+            private static bool IsFrameworkAssembly(string name)
+            {
+                if (name == "Il2Cppmscorlib" || name == "mscorlib" || name == "netstandard")
+                    return true;
+                if (name.StartsWith("Il2CppSystem", StringComparison.Ordinal)) return true;
+                if (name.StartsWith("Il2CppInterop", StringComparison.Ordinal)) return true;
+                if (name.StartsWith("System", StringComparison.Ordinal)) return true;
+                if (name.StartsWith("Mono", StringComparison.Ordinal)) return true;
+                if (name.StartsWith("UnityEngine", StringComparison.Ordinal)) return true;
+                return false;
+            }
+
+            private static string GetScopeAssembly(ITypeDefOrRef tr)
+            {
+                if (tr.DeclaringType != null)
+                    return GetScopeAssembly(tr.DeclaringType);
+                if (tr is TypeRef tref && tref.ResolutionScope is AssemblyRef ar)
+                    return ar.Name;
+                if (tr is TypeDef td && td.Module != null)
+                    return td.Module.Assembly?.Name?.String ?? Path.GetFileNameWithoutExtension(td.Module.Name ?? "");
+                return null;
+            }
+
+            private static string GetTypeAsm(ITypeDefOrRef tr)
+            {
+                if (tr is TypeDef td && td.Module != null)
+                    return td.Module.Assembly?.Name?.String ?? Path.GetFileNameWithoutExtension(td.Module.Name ?? "");
+                return GetScopeAssembly(tr);
             }
 
             private static string ToOrigFullName(ITypeDefOrRef tr)
             {
                 if (tr.DeclaringType != null)
                     return ToOrigFullName(tr.DeclaringType) + "/" + tr.Name;
-                var ns = tr.Namespace ?? "";
+                var ns = (string)tr.Namespace ?? "";
                 if (ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
-                    ns = ns.Substring(6);
+                    ns = ns.Substring("Il2Cpp".Length);
                 return (ns.Length == 0 ? "" : ns + ".") + tr.Name;
+            }
+
+            private static bool IsAliasedType(ITypeDefOrRef tr)
+            {
+                // A type needs an alias if it's referenced with an Il2Cpp prefix and lives in
+                // one of the loaded interop modules (framework/Unity built-ins are excluded).
+                var ns = (string)tr.Namespace ?? "";
+                if (!ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
+                    return false;
+                var asm = GetScopeAssembly(tr);
+                return asm != null;
+            }
+
+            private static AssemblyRef GetAssemblyRef(ModuleDefMD mod, string asmName)
+            {
+                return mod.GetAssemblyRef(asmName);
             }
         }
     }
