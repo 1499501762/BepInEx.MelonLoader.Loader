@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using BepInEx.Logging;
 using MelonLoader.Bootstrap;
 using MelonLoader.InternalUtils;
@@ -58,11 +59,42 @@ namespace MelonLoader.Hosting
             lib.NativeHookDetach = NativeHookDetach;
             BootstrapInterop.InitializeManaged(lib);
 
-            // Approach A: the game interop assembly ships with Il2Cpp.* alias types (the
-            // loader patcher adds them before the interop is loaded), so MelonLoader mods
-            // load verbatim. Do NOT rewrite mods on disk here.
+            // Approach A: mods are loaded verbatim and never rewritten. The game interop
+            // assembly must ship Il2Cpp.* alias types, so ensure they exist (idempotent).
+            // Note: BepInEx preloads interop before plugins run, so a freshly generated
+            // alias interop takes effect on the next game launch (we log a restart hint).
+            TryEnsureInteropAliases(baseDirectory);
 
             Core.Initialize();
+        }
+
+        /// <summary>
+        /// Ensures the BepInEx game interop carries <c>Il2Cpp.*</c> alias types for the
+        /// installed mods (MelonLoader mods reference Il2Cpp-prefixed game types and are
+        /// loaded verbatim). Rewrites the interop assembly, never the mods. Idempotent.
+        /// </summary>
+        private static void TryEnsureInteropAliases(string baseDirectory)
+        {
+#if NET6_0_OR_GREATER
+            try
+            {
+                var gameRoot = Path.GetDirectoryName(baseDirectory);
+                if (string.IsNullOrEmpty(gameRoot))
+                    return;
+                var interopPath = Path.Combine(gameRoot, "BepInEx", "interop", "Assembly-CSharp.dll");
+                if (!File.Exists(interopPath))
+                    return;
+
+                var modsDir = Path.Combine(baseDirectory, "Mods");
+                var userLibsDir = Path.Combine(baseDirectory, "UserLibs");
+                if (Il2CppInteropAliasInjector.EnsureAliases(interopPath, modsDir, userLibsDir))
+                    MelonLogger.Msg("[BepInExHost] Interop aliases installed - restart the game for them to take effect");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[BepInExHost] Interop alias check failed: {ex.Message}");
+            }
+#endif
         }
 
         /// <summary>
