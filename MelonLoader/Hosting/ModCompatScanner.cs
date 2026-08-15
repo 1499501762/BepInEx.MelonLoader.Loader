@@ -46,14 +46,15 @@ namespace MelonLoader.Hosting
                 if (hits.Count == 0)
                     continue;
                 warned++;
-                MelonLogger.Warning($"[CompatScan] '{Path.GetFileName(file)}' 调用了在 BepInEx 桥接下未完整实现的 MelonLoader API：");
+                MelonLogger.Warning($"[CompatScan] '{Path.GetFileName(file)}' calls MelonLoader APIs that are NOT fully implemented under the BepInEx bridge:");
                 foreach (var h in hits)
                     MelonLogger.Warning($"  - {h.Key}: {h.Value}");
-                MelonLogger.Warning($"  -> 该 mod 依赖原生 MelonLoader 能力，在此加载器下相关功能可能异常；如遇问题请反馈给 BepInEx.MelonLoader.Loader 作者，而不是 mod 作者。");
+                MelonLogger.Warning($"  -> This mod relies on native MelonLoader capabilities and may behave unexpectedly under this loader.");
+                MelonLogger.Warning($"  -> Please report issues to the BepInEx MelonLoader Loader FORK, NOT the mod author: https://github.com/1499501762/BepInEx.MelonLoader.Loader");
             }
 
             // Always log a summary so the scan is observable and its coverage verifiable.
-            MelonLogger.Msg($"[CompatScan] 扫描 {scanned} 个 mod 程序集，{warned} 个含未实现 API 调用。");
+            MelonLogger.Msg($"[CompatScan] Scanned {scanned} mod assembly(ies); {warned} call unsupported native-MelonLoader API(s).");
         }
 
         private static List<KeyValuePair<string, string>> ScanAssembly(string file)
