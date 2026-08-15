@@ -103,7 +103,7 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 用户建议：用 `TypeForwardedToAttribute` 把 `Il2Cpp.X` 转发到原始类型，避免 `Assembly.GetTypes()` 出现重复类型。
 **评估**：`TypeForwardedTo` 要求**跨程序集**转发且**类型全名一致**；本场景是**同程序集内改名**（`LookAtTarget` → `Il2Cpp.LookAtTarget`，全名不同），CLR 不支持，此路线不成立。当前"复制 TypeDef + 跨模块 TypeRef"是实现同程序集改名的必要手段。真实风险可控：mod 视角只引用 `Il2Cpp.*` 前缀类型，正常业务 mod 不会遍历找无前缀类型；极端扫描类 mod（按命名空间/特性全量扫描）需另行评估。
 
-**替代方案（托管层反射钩子，推荐评估）**：不改 interop 别名注入，只在 MelonLoader 托管层用 Harmony patch `Assembly.GetTypes()` / `GetExportedTypes()` / `GetType(string)`：
+**替代方案（托管层反射钩子）— ⚠️ 已实施并**实测否决**（2026-08-16）**：不改 interop 别名注入，只在 MelonLoader 托管层用 Harmony patch `Assembly.GetTypes()` / `GetExportedTypes()` / `GetType(string)`：
 - 对 **interop 程序集**过滤掉无前缀原始类型，只返回 `Il2Cpp.*` 前缀别名版本 → mod 的托管反射视角与原生 MLL 完全一致，看不到重复类型；
 - `GetType(string)` 做双向兼容，两种命名空间都能查到。
 **优点**：行为对齐度高、成本低、不碰 interop 原生层。**缺点**：属于托管层"障眼法"，绕过硬反射 API 直读元数据仍可见重复，但对 99% mod 足够。
@@ -111,6 +111,8 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 1. 作用域必须严格限定在"含别名类型的 interop 程序集"，避免影响 BepInEx/MLL 自身的反射逻辑；
 2. **Il2CppInterop.Runtime 是否会在托管侧遍历 interop 的 `GetTypes()` 做类型注册**——若会，过滤可能破坏原始类型初始化（本项目铁律：理论必须实测）；
 3. 需缓存过滤结果（interop 类型数千，避免每次调用 O(n) 过滤 + 分配）。
+
+**实测结论（否决，全部回退）**：已完整实施并真机验证——Harmony postfix patch `Assembly.GetTypes/GetExportedTypes` + 程序集级 `[MelonLoaderAliasedInterop]` 标记（AliasGenerator 写回时打标）+ 按命名空间过滤（保留引擎/系统 + `Il2Cpp*`）+ 缓存。关键证据：**BepInEx 6 的 42 个 aliased interop 程序集 `GetTypes()` 全部抛 `ReflectionTypeLoadException`**（BepInEx interop 存在无法解析的类型引用）→ **postfix 在原方法抛异常时不执行，过滤对 interop 永远不生效**。同时证明"重复类型"问题实际不存在——`GetTypes()` 从不成功返回，mod 拿不到重复列表。Harmony postfix 实际只拦截到对**自身/非 interop** 程序集的 GetTypes 调用（如 `IronNestFCS.CustomRecords` 扫自己），本就无需过滤。结论：反射钩子无法解决该问题（postfix 路径被 GetTypes 异常阻断；prefix 完全接管枚举需复杂处理且 Type 解析不可靠），已全部回退，代码库保持干净。**经验：BepInEx 6 interop 的托管反射 `GetTypes()` 本身不可用（抛异常），任何依赖枚举 interop 类型的托管层方案都先验证这一点。**
 
 ### 7.2 补全 `NativeHookAttach` 兼容层 — ✅ 可行
 对接 BepInEx 底层 detour 接口（DetourProvider），封装与 MLL 签名一致的 `MelonUtils.NativeHookAttach/Detach`。覆盖 99% 使用该 API 的 mod；hook 链顺序与原生 MLL 无法完全一致（已知限制）。
