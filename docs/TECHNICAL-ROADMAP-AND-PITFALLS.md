@@ -114,14 +114,19 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 
 **实测结论（否决，全部回退）**：已完整实施并真机验证——Harmony postfix patch `Assembly.GetTypes/GetExportedTypes` + 程序集级 `[MelonLoaderAliasedInterop]` 标记（AliasGenerator 写回时打标）+ 按命名空间过滤（保留引擎/系统 + `Il2Cpp*`）+ 缓存。关键证据：**BepInEx 6 的 42 个 aliased interop 程序集 `GetTypes()` 全部抛 `ReflectionTypeLoadException`**（BepInEx interop 存在无法解析的类型引用）→ **postfix 在原方法抛异常时不执行，过滤对 interop 永远不生效**。同时证明"重复类型"问题实际不存在——`GetTypes()` 从不成功返回，mod 拿不到重复列表。Harmony postfix 实际只拦截到对**自身/非 interop** 程序集的 GetTypes 调用（如 `IronNestFCS.CustomRecords` 扫自己），本就无需过滤。结论：反射钩子无法解决该问题（postfix 路径被 GetTypes 异常阻断；prefix 完全接管枚举需复杂处理且 Type 解析不可靠），已全部回退，代码库保持干净。**经验：BepInEx 6 interop 的托管反射 `GetTypes()` 本身不可用（抛异常），任何依赖枚举 interop 类型的托管层方案都先验证这一点。**
 
-### 7.2 补全 `NativeHookAttach` 兼容层 — ✅ 可行
-对接 BepInEx 底层 detour 接口（DetourProvider），封装与 MLL 签名一致的 `MelonUtils.NativeHookAttach/Detach`。覆盖 99% 使用该 API 的 mod；hook 链顺序与原生 MLL 无法完全一致（已知限制）。
+### 7.2 补全 `NativeHookAttach` 兼容层 — ✅ 已实施（2026-08-16）
+MLL 的 `MelonUtils.NativeHookAttach` 原本在 BepInEx 托管下是空操作（hook 不生效）。已改为用 BepInEx 内置 **dobby.dll** 的 `DobbyHook`/`DobbyDestroy` P/Invoke 直接做原生指针级 detour（`BepInExHost.NativeHookAttach/Detach`）：`target` 传入原函数地址指针（in/out），`detour` 传入 native 入口指针，trampoline 写回 `*target`——与 MLL `NativeHook<T>` 语义一致。
+- 关键原因：BepInEx 的 `Il2CppInteropDetourProvider.Create<TDelegate>` 只接受 managed Delegate，而 MLL 给的是 native 函数指针（IL2CPP 下无法动态生成 delegate 包装），故直接用 Dobby 原生 API。
+- 验证：`Il2CppICallInjector`（依赖 NativeHook）hook `il2cpp_resolve_icall` 成功、游戏稳定、mods 正常、零错误。
+- 已知限制：hook 链顺序与原生 MLL 无法完全一致（Dobby 语义）。
 
-### 7.3 托管实现 `Il2CppICallInjector` — ✅ 可行（已有基础）
-代码库已有 `MelonLoader/Fixes/Il2CppInterop/Il2CppICallInjector.cs`。进一步对接 BepInEx IL2CPP 的 ICall 解析钩子，让依赖 icall 劫持的 mod 可工作。
+### 7.3 托管实现 `Il2CppICallInjector` — ✅ 已实施（2026-08-16）
+`MelonLoader/Fixes/Il2CppInterop/Il2CppICallInjector.cs` 早已存在且已在 `Core.cs` 接入（Install/Shutdown），但依赖 `NativeHook`→`NativeHookAttach`（原为空操作）导致 hook 不生效。7.2 的 Dobby detour 落地后自动生效：hook `il2cpp_resolve_icall`、对未解析 icall 注入托管 shim。验证：`Registered mono icall` 日志出现、游戏零错误。
 
-### 7.4 补全环境模拟 — ✅ 可行（低风险）
-复刻 MLL 的环境变量、AppContext 开关、目录结构、日志格式、配置文件路径，让 mod 读取运行环境时无感知差异。
+### 7.4 补全环境模拟 — ✅ 已实施（2026-08-16）
+- **启动参数**：原生 MLL 的 `LoaderConfig.Initialize/CoreConfig.Initialize` 是 BOOTSTRAP-only，BepInEx 托管下从未运行 → `--melonloader.*` 参数不生效。已在 `BepInExHost` 新增 `ApplyLaunchArguments`（读 `Environment.GetCommandLineArgs()`）补全 `--melonloader.debug/captureplayerlogs/harmonyloglevel/consolemode/nosfload/nosfmanifest/hostfxr` 与 `--no-mods/--quitfix` 的解析。
+- 环境变量 `IL2CPP_INTEROP_DATABASES_LOCATION` 已设（Core.cs）；`MelonEnvironment` 目录结构完整；`PATH`/`NO_COLOR`/`TEMP` 通用。
+- **验证限制**：Iron Nest 游戏对任何命令行参数敏感（直接 exe+参数启动会在 BepInEx 早期退出，LogOutput 为空），故该游戏无法端到端验证参数生效；无参数基线启动正常（无回归），解析逻辑简单可审查。
 
 ### 7.5 mod 兼容性自检 — ✅ 已实施（2026-08-16）
 启动时（mods 加载前）用 **dnlib 静态扫描** mod 程序集的 IL 调用，识别对桥接下未实现/空操作 API（`MelonUtils.NativeHookAttach/Detach`、`Imports.Hook/Unhook`）的引用，打印英文 `[CompatScan]` Warning 警告（注明依赖原生 MLL 能力、并引导反馈到 **BepInEx MelonLoader Loader 分叉版** `https://github.com/1499501762/BepInEx.MelonLoader.Loader` 而非 mod 作者），从源头减少无效 issue。
@@ -129,7 +134,7 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 - 关键选型：**dnlib 静态扫描而非运行时反射**——因为 BepInEx 6 interop 的托管 `GetTypes()` 抛 `ReflectionTypeLoadException`（见 7.1 实测），运行时枚举 interop 不可靠；dnlib 直接读 IL operand 的 `MemberRef`/`MethodSpec`，可靠且零加载副作用。
 - 真实验证：正常扫描 2 个 mod 程序集 0 警告；注入调用 `NativeHookAttach` 的测试 dll 后正确打出 `[Warning]` 级 `[CompatScan]` 警告（含 API 全名 + 原因 + 引导文案），删除测试 dll 后恢复 0 警告；游戏零错误。
 
-**结论**：7.2–7.4 待排期实施；7.1 因 `TypeForwardedTo` 语义限制不可行（反射钩子替代也已实测否决），保持现有复制方案；7.5 已完成。
+**结论**：7.1 因 `TypeForwardedTo` 语义限制不可行（反射钩子替代也已实测否决）；**7.2–7.5 已全部实施**。
 
 ## 8. 相关文件
 

@@ -45,6 +45,12 @@ namespace MelonLoader.Hosting
             config.Loader.BaseDirectory = baseDirectory;
             LoaderConfig.Current = config;
 
+            // Roadmap 7.4: native MelonLoader's bootstrap parses --melonloader.* launch args
+            // into LoaderConfig (LoaderConfig.Initialize/CoreConfig.Initialize are BOOTSTRAP-only
+            // and never ran under BepInEx hosting). Re-apply the flags here so launch options
+            // behave identically for mods.
+            ApplyLaunchArguments(config);
+
             // Install a managed BootstrapLibrary backed by BepInEx.
             var lib = new BootstrapLibrary();
             lib.LogMsg = LogMsg;
@@ -69,6 +75,53 @@ namespace MelonLoader.Hosting
             PrintEarlyAccessBanner();
 
             Core.Initialize();
+        }
+
+        /// <summary>
+        /// Applies native MelonLoader's <c>--melonloader.*</c> launch options to the loader
+        /// config. The original bootstrap does this in LoaderConfig.CoreConfig.Initialize
+        /// (BOOTSTRAP-only), which the BepInEx host never runs, so the flags are re-applied
+        /// here to keep launch-option behaviour identical for mods (roadmap 7.4).
+        /// </summary>
+        private static void ApplyLaunchArguments(LoaderConfig config)
+        {
+            try
+            {
+                var args = Environment.GetCommandLineArgs();
+                bool Has(string name) =>
+                    Array.IndexOf(args, "--" + name) >= 0 || Array.IndexOf(args, name) >= 0;
+                string Value(string name)
+                {
+                    var full = "--" + name;
+                    for (int i = 0; i < args.Length - 1; i++)
+                        if (args[i] == full || args[i] == name)
+                            return args[i + 1];
+                    return null;
+                }
+
+                if (Has("melonloader.debug")) config.Loader.DebugMode = true;
+                if (Has("melonloader.captureplayerlogs")) config.Loader.CapturePlayerLogs = true;
+                if (int.TryParse(Value("melonloader.harmonyloglevel"), out var hll))
+                    config.Loader.HarmonyLogLevel = (LoaderConfig.CoreConfig.HarmonyLogVerbosity)Math.Clamp(hll,
+                        (int)LoaderConfig.CoreConfig.HarmonyLogVerbosity.None,
+                        (int)LoaderConfig.CoreConfig.HarmonyLogVerbosity.IL);
+                if (Has("no-mods")) config.Loader.Disable = true;
+                if (Has("quitfix")) config.Loader.ForceQuit = true;
+                if (Has("melonloader.disablestartscreen")) config.Loader.DisableStartScreen = true;
+                if (Has("melonloader.launchdebugger")) config.Loader.LaunchDebugger = true;
+                if (int.TryParse(Value("melonloader.consolemode"), out var cm))
+                    config.Loader.Theme = (LoaderConfig.CoreConfig.LoaderTheme)Math.Clamp(cm,
+                        (int)LoaderConfig.CoreConfig.LoaderTheme.Normal,
+                        (int)LoaderConfig.CoreConfig.LoaderTheme.Lemon);
+                if (Has("melonloader.nosfload")) config.Loader.DisableSubFolderLoad = true;
+                if (Has("melonloader.nosfmanifest")) config.Loader.DisableSubFolderManifest = true;
+                var hostfxr = Value("melonloader.hostfxr");
+                if (hostfxr != null) config.Loader.HostFXRPathOverride = hostfxr;
+            }
+            catch
+            {
+                // Argument parsing is best-effort; never break the host.
+            }
         }
 
         /// <summary>
@@ -321,9 +374,48 @@ namespace MelonLoader.Hosting
             Core.Quit();
         }
 
-        // Native hooks are not required when hosted by BepInEx (MonoMod / BepInEx handles hooking).
-        private static unsafe void NativeHookAttach(nint* target, nint detour) { }
-        private static unsafe void NativeHookDetach(nint* target, nint detour) { }
+        // Native hooks are backed by BepInEx's built-in Dobby (dobby.dll in BepInEx/core).
+        // MelonUtils.NativeHookAttach expects a REAL native detour: `target` points to an
+        // IntPtr holding the original function address (in/out), `detour` is a native entry
+        // pointer, and the trampoline must be written back through *target. BepInEx's managed
+        // detour provider only accepts delegates (Il2CppInteropDetourProvider.Create<TDelegate>),
+        // so we hook the native pointers directly with Dobby. This is what makes the already-
+        // wired Il2CppICallInjector (which wraps il2cpp_resolve_icall via NativeHook<T>) work.
+        private static unsafe void NativeHookAttach(nint* target, nint detour)
+        {
+            try
+            {
+                if (target == null || *target == IntPtr.Zero || detour == IntPtr.Zero)
+                    return;
+                IntPtr trampoline;
+                if (DobbyHook(*target, detour, out trampoline) == 0)
+                    *target = trampoline;
+            }
+            catch
+            {
+                // Best-effort: a failed hook must not take the host down.
+            }
+        }
+
+        private static unsafe void NativeHookDetach(nint* target, nint detour)
+        {
+            try
+            {
+                if (target == null || *target == IntPtr.Zero)
+                    return;
+                DobbyDestroy(*target);
+            }
+            catch
+            {
+            }
+        }
+
+        // dobby.dll ships with BepInEx (BepInEx/core) and is already loaded by the host.
+        [System.Runtime.InteropServices.DllImport("dobby")]
+        private static extern int DobbyHook(IntPtr target, IntPtr detour, out IntPtr trampoline);
+
+        [System.Runtime.InteropServices.DllImport("dobby")]
+        private static extern int DobbyDestroy(IntPtr target);
 
         private static unsafe void LogMsg(ColorARGB* msgColor, string msg, int msgLength,
             ColorARGB* sectionColor, string section, int sectionLength,
