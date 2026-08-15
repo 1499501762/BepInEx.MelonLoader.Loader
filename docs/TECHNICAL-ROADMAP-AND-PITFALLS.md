@@ -95,7 +95,29 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 5. **每次功能完成必须真实游戏实测再发布**——理论可行不等于实际可行（v2.3.6 / v2.3.7 都是实测才暴露的）。
 6. 彩色输出走原生 Win32 console，别依赖被重定向的 `Console`。
 
-## 7. 相关文件
+## 7. 后续优化路线（候选，尚未实施）
+
+> 均符合 Approach A 铁律。以下为可行性评估，供排期参考。
+
+### 7.1 类型转发替代类型复制（消除重复类型）— ⚠️ 不可行
+用户建议：用 `TypeForwardedToAttribute` 把 `Il2Cpp.X` 转发到原始类型，避免 `Assembly.GetTypes()` 出现重复类型。
+**评估**：`TypeForwardedTo` 要求**跨程序集**转发且**类型全名一致**；本场景是**同程序集内改名**（`LookAtTarget` → `Il2Cpp.LookAtTarget`，全名不同），CLR 不支持，此路线不成立。当前"复制 TypeDef + 跨模块 TypeRef"是实现同程序集改名的必要手段。真实风险可控：mod 视角只引用 `Il2Cpp.*` 前缀类型，正常业务 mod 不会遍历找无前缀类型；极端扫描类 mod（按命名空间/特性全量扫描）需另行评估。
+
+### 7.2 补全 `NativeHookAttach` 兼容层 — ✅ 可行
+对接 BepInEx 底层 detour 接口（DetourProvider），封装与 MLL 签名一致的 `MelonUtils.NativeHookAttach/Detach`。覆盖 99% 使用该 API 的 mod；hook 链顺序与原生 MLL 无法完全一致（已知限制）。
+
+### 7.3 托管实现 `Il2CppICallInjector` — ✅ 可行（已有基础）
+代码库已有 `MelonLoader/Fixes/Il2CppInterop/Il2CppICallInjector.cs`。进一步对接 BepInEx IL2CPP 的 ICall 解析钩子，让依赖 icall 劫持的 mod 可工作。
+
+### 7.4 补全环境模拟 — ✅ 可行（低风险）
+复刻 MLL 的环境变量、AppContext 开关、目录结构、日志格式、配置文件路径，让 mod 读取运行环境时无感知差异。
+
+### 7.5 mod 兼容性自检 — ✅ 高价值
+启动时扫描 mod 程序集，识别对未实现底层 API 的调用，主动打印明确警告（"此 mod 依赖原生 MLL 能力，桥接下可能异常"），从源头减少无效 issue。
+
+**结论**：7.2–7.5 均可排期实施；7.1 因 `TypeForwardedTo` 语义限制不可行，保持现有复制方案。
+
+## 8. 相关文件
 
 - `BepInEx.MelonLoader.Loader.Patcher/Patcher.cs` — preloader patcher（构造函数触发别名注入）
 - `MelonLoader/Hosting/Il2CppInteropAliasInjector.cs` — interop 别名生成器
