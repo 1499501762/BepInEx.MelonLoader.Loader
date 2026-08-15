@@ -2,6 +2,23 @@
 
 > 状态：**全部完成**（核心移植、BepInEx 托管、宿主插件、构建打包、真实游戏完整验证）
 > 日期：2026-08-09
+
+## v2.3.7：Interop 别名治本（BepInEx 6 Preloader Patcher，2026-08-15）
+
+**背景**：MelonLoader mods 引用 `Il2Cpp.*` 前缀类型（`Il2Cpp.LookAtTarget`、`Il2CppTMPro.TMP_Text`、`Il2Cpp.CylinderShellSelector`），BepInEx interop 用原始命名空间。Approach A 要求 mods **verbatim 加载、绝不 rewrite**，因此在 BepInEx interop 中生成别名。
+
+**关键发现（真实游戏实测）**：插件（plugin）内无法改写 interop —— BepInEx 在插件运行前已把**所有** interop 程序集加载并内存映射锁定，任何写回都 `Access denied`（64 个程序集全失败）。
+
+**方案**：新增 `BepInEx.MelonLoader.Loader.Patcher`（BepInEx 6 Preloader `BasePatcher`），在 **preloader 阶段（interop 生成/加载之前）** 维护别名：
+- 全量别名：对每个非引擎 interop 程序集的所有顶层游戏类型生成 `Il2Cpp*` 前缀别名（`Il2Cpp.*` / `Il2CppTMPro.*` / `Il2CppFMOD.*` …）
+- 指纹跳过：`BepInEx/interop/.melonloader-aliased` 记录目录指纹（name/size/time）；未变则跳过（启动快），BepInEx 重生成 interop 则自动全量重生成
+- 引擎程序集**不别名**（类型命名空间 `UnityEngine.*` / `Unity.*` / `System.*`）：MelonLoader 从不给这些加前缀，mods 用无前缀引用，BepInEx interop 已提供
+- 修复的写回/映射缺陷：写回前 `ModuleDefMD.Dispose()`（内存映射锁）；排除 `__Generated.dll`；跨模块别名引用写成 TypeRef；未处理的游戏类型现场别名（保证 `TMP_Text.get_font()` 返回 `Il2CppTMPro.TMP_FontAsset`）；`Il2CppClassPointerStore<Il2Cpp.X>` 泛型参数映射（保证 `GetComponentInChildren<Il2Cpp.X>()` 命中同一初始化槽位）
+
+**部署**：release zip 的 `BepInEx/patchers/` 下含 patcher + dnlib.dll（构建脚本已更新）。
+
+**真实游戏验证**（Iron Nest Heavy Turret Simulator）：IronNestFCS 场景激活（`GetComponentInChildren<Il2Cpp.CylinderShellSelector>()`）、CustomRecords、热重载 Logic 全部零错误。
+
 > 背景：BepInEx 6.0.0-be.785 升级已完成并验证（见下方"已完成"章节）。MelonLoader 0.7.3 的完整移植已执行，本文档记录实施路径与**最终验证结果**。
 > **最终结论：net6.0 (IL2CPP) 在真实游戏 Iron Nest 中完整验证通过——ML mod（CustomRecords、IronNestFCS 含开火）与 BepInEx 插件（Coop）全部正常工作。**
 
