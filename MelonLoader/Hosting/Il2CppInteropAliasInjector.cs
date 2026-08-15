@@ -26,10 +26,13 @@ namespace MelonLoader.Hosting
     {
         /// <summary>
         /// Ensures every interop assembly under <paramref name="interopDir"/> contains
-        /// Il2Cpp-prefixed aliases for the game types referenced by the assemblies under
-        /// <paramref name="modsDirs"/>. Returns <c>true</c> if any file was rewritten.
+        /// Il2Cpp-prefixed aliases for <b>all</b> of its game types. A full alias pass
+        /// covers any mod reference (e.g. <c>Il2Cpp.LookAtTarget</c> from Assembly-CSharp
+        /// or <c>Il2CppTMPro.TMP_Text</c> from Unity.TextMeshPro) no matter which interop
+        /// assembly the type lives in, so new mods never need a regenerated alias set.
+        /// Returns <c>true</c> if any file was rewritten (restart required to take effect).
         /// </summary>
-        public static bool EnsureAliases(string interopDir, params string[] modsDirs)
+        public static bool EnsureAliases(string interopDir)
         {
             try
             {
@@ -37,7 +40,7 @@ namespace MelonLoader.Hosting
                     return false;
 
                 var gen = new AliasGenerator(interopDir);
-                return gen.Run(modsDirs);
+                return gen.Run();
             }
             catch (Exception ex)
             {
@@ -57,10 +60,15 @@ namespace MelonLoader.Hosting
             private readonly Dictionary<string, List<TypeDef>> _nestedByParent = new();
             private readonly Dictionary<string, TypeDef> _aliasByOrig = new();
             private readonly HashSet<ModuleDefMD> _dirtyModules = new();
+            private readonly string _interopDir;
             private HashSet<string> _collected = new();
+
+            private const string MarkerVersion = "full-v1";
+            private const string MarkerFile = ".melonloader-aliased";
 
             internal AliasGenerator(string interopDir)
             {
+                _interopDir = interopDir;
                 foreach (var file in Directory.GetFiles(interopDir, "*.dll", SearchOption.TopDirectoryOnly))
                 {
                     var asmName = Path.GetFileNameWithoutExtension(file);
@@ -91,34 +99,48 @@ namespace MelonLoader.Hosting
                 }
             }
 
-            internal bool Run(IReadOnlyList<string> modsDirs)
+            internal bool Run()
             {
                 if (_modulesByAsm.Count == 0)
                     return false;
 
-                // 1) Seed collection: every Il2Cpp-prefixed type reference found in the mods.
-                var seeds = new HashSet<string>();
-                if (modsDirs != null)
-                    foreach (var dir in modsDirs)
-                        CollectFromMods(seeds, dir);
-                if (seeds.Count == 0)
-                    return false;
+                // Fingerprint skip: a full alias pass records the interop fingerprint
+                // (file name/size/timestamp) + marker version. If nothing changed since,
+                // the full alias set is already in place and we skip. This is reliable:
+                // when BepInEx regenerates the interop the fingerprint changes and a full
+                // pass runs again. New mods never need a regeneration (the full set already
+                // covers every game type).
+                var markerPath = Path.Combine(_interopDir, MarkerFile);
+                if (File.Exists(markerPath))
+                {
+                    var parts = File.ReadAllText(markerPath).Split('\n');
+                    if (parts.Length >= 2 && parts[0].Trim() == MarkerVersion && parts[1].Trim() == ComputeFingerprint(_interopDir))
+                        return false;
+                }
 
-                // 2) Closure over referenced game types.
+                // Full regeneration: seed every top-level game type of every module so
+                // ANY mod reference (Il2Cpp.LookAtTarget, Il2CppTMPro.TMP_Text, ...) is
+                // covered no matter which interop assembly the type lives in. No per-mod
+                // scanning needed; new mods never require another regeneration.
+                var seeds = new HashSet<string>();
+                foreach (var kv in _modulesByAsm)
+                    foreach (var t in kv.Value.Types)
+                        if (!t.IsNested)
+                            seeds.Add(Key(kv.Key, t.FullName));
+
                 _collected = new HashSet<string>();
                 foreach (var s in seeds)
                     if (_origByFull.TryGetValue(s, out var td))
                         CollectType(td);
 
-                // 3) Clone collected types into aliases (per owning module).
                 foreach (var full in _collected.OrderBy(x => x))
                     if (_origByFull.TryGetValue(full, out var td))
                         EnsureAlias(td);
                 if (_aliasByOrig.Count == 0)
                     return false;
 
-                // 4) Write back each modified module via temp file + move (the module is
-                //    memory-mapped from its path, so writing in place would fail).
+                // Write back each modified module via temp file + move (the module is
+                // memory-mapped from its path, so writing in place would fail).
                 foreach (var m in _dirtyModules)
                 {
                     var origPath = m.Location;
@@ -136,69 +158,27 @@ namespace MelonLoader.Hosting
                             File.Delete(tmp);
                     }
                 }
+
+                // Record the interop fingerprint so subsequent launches skip this pass
+                // until the interop actually changes (e.g. BepInEx regenerates it).
+                try
+                {
+                    File.WriteAllText(markerPath, MarkerVersion + "\n" + ComputeFingerprint(_interopDir));
+                }
+                catch { }
+
                 return true;
             }
 
-            // ---- seed collection ----
-            private void CollectFromMods(HashSet<string> names, string dir)
+            private static string ComputeFingerprint(string interopDir)
             {
-                try
+                var sb = new System.Text.StringBuilder();
+                foreach (var f in Directory.GetFiles(interopDir, "*.dll", SearchOption.TopDirectoryOnly).OrderBy(x => x, StringComparer.Ordinal))
                 {
-                    if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
-                        return;
-                    foreach (var file in Directory.GetFiles(dir, "*.dll", SearchOption.AllDirectories))
-                    {
-                        try
-                        {
-                            var md = ModuleDefMD.Load(file);
-                            foreach (var tr in md.GetTypeRefs())
-                                CollectSeed(names, tr);
-                            foreach (var t in md.GetTypes())
-                            {
-                                CollectAttrs(names, t.CustomAttributes);
-                                foreach (var m in t.Methods) CollectAttrs(names, m.CustomAttributes);
-                                foreach (var f in t.Fields) CollectAttrs(names, f.CustomAttributes);
-                            }
-                        }
-                        catch { }
-                    }
+                    var fi = new FileInfo(f);
+                    sb.Append(Path.GetFileName(f)).Append(':').Append(fi.Length).Append(':').Append(fi.LastWriteTimeUtc.Ticks).Append('|');
                 }
-                catch { }
-            }
-
-            private void CollectSeed(HashSet<string> names, ITypeDefOrRef tr)
-            {
-                if (tr == null)
-                    return;
-                var ns = (string)tr.Namespace ?? "";
-                if (!ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
-                    return;
-                var asm = GetScopeAssembly(tr);
-                if (asm == null || !_modulesByAsm.ContainsKey(asm))
-                    return;
-                names.Add(Key(asm, ToOrigFullName(tr)));
-            }
-
-            private void CollectAttrs(HashSet<string> names, IList<CustomAttribute> attrs)
-            {
-                foreach (var attr in attrs)
-                {
-                    try
-                    {
-                        foreach (var a in attr.ConstructorArguments) CollectArg(names, a);
-                        foreach (var n in attr.NamedArguments) CollectArg(names, n.Argument);
-                    }
-                    catch { }
-                }
-            }
-
-            private void CollectArg(HashSet<string> names, CAArgument arg)
-            {
-                if (arg.Type != null && arg.Type.FullName == "System.Type" && arg.Value is ITypeDefOrRef tr)
-                    CollectSeed(names, tr);
-                else if (arg.Value is CAArgument nested) CollectArg(names, nested);
-                else if (arg.Value is IList<CAArgument> arr)
-                    foreach (var e in arr) CollectArg(names, e);
+                return sb.ToString();
             }
 
             // ---- closure collection ----

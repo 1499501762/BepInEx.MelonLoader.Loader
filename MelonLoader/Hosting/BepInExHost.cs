@@ -85,14 +85,12 @@ namespace MelonLoader.Hosting
                 if (!Directory.Exists(interopDir))
                     return;
 
-                // Scan everywhere a mod (or its hot-reloaded logic DLL, e.g.
-                // IronNestFCS\IronNestFCS.Logic.dll) may be installed so every
-                // Il2Cpp-prefixed reference (Il2Cpp.LookAtTarget, Il2CppTMPro.TMP_Text,
-                // ...) is covered regardless of which interop assembly it lives in.
-                var modsDir = Path.Combine(baseDirectory, "Mods");
-                var userLibsDir = Path.Combine(baseDirectory, "UserLibs");
-                var userDataDir = Path.Combine(baseDirectory, "UserData");
-                if (Il2CppInteropAliasInjector.EnsureAliases(interopDir, modsDir, userLibsDir, userDataDir))
+                // Full alias pass: every game type of every interop assembly gets an
+                // Il2Cpp-prefixed alias (Il2Cpp.LookAtTarget in Assembly-CSharp,
+                // Il2CppTMPro.TMP_Text in Unity.TextMeshPro, ...). Any mod reference is
+                // covered regardless of which interop assembly the type lives in, so new
+                // mods never need another regeneration. Skipped when already fully aliased.
+                if (Il2CppInteropAliasInjector.EnsureAliases(interopDir))
                     MelonLogger.Msg("[BepInExHost] Interop aliases installed - restart the game for them to take effect");
             }
             catch (Exception ex)
