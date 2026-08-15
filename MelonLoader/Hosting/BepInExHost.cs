@@ -66,7 +66,88 @@ namespace MelonLoader.Hosting
             // rewriting them here (from a plugin) is impossible because BepInEx already
             // loaded every interop assembly by the time plugins run (access denied).
 
+            PrintEarlyAccessBanner();
+
             Core.Initialize();
+        }
+
+        /// <summary>
+        /// Prints a prominent watermelon-colored (pink text on a green frame) bilingual
+        /// early-access warning banner when the loader initializes. MelonLoader's colored
+        /// log calls are stripped by <see cref="LogMsg"/> (BepInEx logs have no colour), so
+        /// the banner renders in colour straight to the console and also keeps a plain-text
+        /// copy in the BepInEx log file for reference.
+        /// </summary>
+        private static void PrintEarlyAccessBanner()
+        {
+            const int width = 62;
+            string[] texts =
+            {
+                " BepInEx MelonLoader Loader is an EARLY-ACCESS mod,",
+                " BepInEx MelonLoader Loader 是一个仍处于早期版本的 mod，",
+                " compatibility issues may occur. 可能存在兼容性问题。",
+                "",
+                " Do NOT report compatibility issues caused by THIS mod to the",
+                " developers of MelonLoader mods - it is not their duty.",
+                " 请不要把因使用本 mod 导致的兼容性问题提交给 MelonLoader",
+                " 下的 mod 开发者，这不是他们的职责。",
+                "",
+                " Report issues to: # BepInEx MelonLoader Loader POST PAGE",
+                " or the GitHub ISSUE PAGE.",
+                " 请把兼容性问题提交到 # BepInEx MelonLoader Loader 的发布页",
+                " 或 GitHub Issue 页。",
+            };
+
+            // Plain-text copy for the BepInEx log file.
+            var sb = new System.Text.StringBuilder();
+            sb.Append('+').Append(new string('-', width)).Append('+').AppendLine();
+            foreach (var t in texts)
+                sb.Append("| ").Append(t.PadRight(width - 1)).Append('|').AppendLine();
+            sb.Append('+').Append(new string('-', width)).Append('+');
+            MelonLogger.Msg(sb.ToString());
+
+            // Watermelon-coloured render straight to the native console (green frame, pink
+            // text). Console.WriteLine would be swallowed by BepInEx's Console.SetOut log
+            // sink (colour lost), so write via the Win32 console API directly.
+            try
+            {
+                var hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+                if (hOut != IntPtr.Zero && hOut != new IntPtr(-1))
+                {
+                    const ushort brightGreen = 2 | 8;      // FOREGROUND_GREEN | INTENSITY
+                    const ushort pink = 1 | 4 | 8;         // FOREGROUND_RED | FOREGROUND_BLUE | INTENSITY
+                    WriteNativeConsole(hOut, "+" + new string('-', width) + "+\n", brightGreen);
+                    foreach (var t in texts)
+                    {
+                        WriteNativeConsole(hOut, "| ", brightGreen);
+                        WriteNativeConsole(hOut, t.PadRight(width - 1), pink);
+                        WriteNativeConsole(hOut, "|\n", brightGreen);
+                    }
+                    WriteNativeConsole(hOut, "+" + new string('-', width) + "+\n", brightGreen);
+                }
+            }
+            catch
+            {
+                // No console (GUI-only) - the BepInEx log copy above is sufficient.
+            }
+        }
+
+        private const int STD_OUTPUT_HANDLE = -11;
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool SetConsoleTextAttribute(IntPtr hConsoleOutput, ushort wAttributes);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern bool WriteConsoleW(IntPtr hConsoleOutput, string lpBuffer, uint nNumberOfCharsToWrite,
+            out uint lpNumberOfCharsWritten, IntPtr lpReserved);
+
+        private static void WriteNativeConsole(IntPtr hOut, string text, ushort color)
+        {
+            SetConsoleTextAttribute(hOut, color);
+            WriteConsoleW(hOut, text, (uint)text.Length, out _, IntPtr.Zero);
         }
 
         /// <summary>
