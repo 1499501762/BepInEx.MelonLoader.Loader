@@ -80,30 +80,45 @@ namespace MelonLoader.Hosting
         /// </summary>
         private static void PrintEarlyAccessBanner()
         {
-            const int width = 62;
-            string[] texts =
+            // English block first, then the Chinese block, each column-aligned by DISPLAY
+            // width (CJK/full-width chars occupy 2 console columns). Empty lines separate
+            // the blocks and pad the box.
+            const int width = 56;
+            string[] english =
             {
-                " BepInEx MelonLoader Loader is an EARLY-ACCESS mod,",
-                " BepInEx MelonLoader Loader 是一个仍处于早期版本的 mod，",
-                " compatibility issues may occur. 可能存在兼容性问题。",
                 "",
-                " Do NOT report compatibility issues caused by THIS mod to the",
-                " developers of MelonLoader mods - it is not their duty.",
-                " 请不要把因使用本 mod 导致的兼容性问题提交给 MelonLoader",
-                " 下的 mod 开发者，这不是他们的职责。",
+                "BepInEx MelonLoader Loader is an EARLY-ACCESS mod and",
+                "may have compatibility issues.",
                 "",
-                " Report issues to: # BepInEx MelonLoader Loader POST PAGE",
-                " or the GitHub ISSUE PAGE.",
-                " 请把兼容性问题提交到 # BepInEx MelonLoader Loader 的发布页",
-                " 或 GitHub Issue 页。",
+                "Do NOT report compatibility issues caused by using this",
+                "mod to developers who develop mods under MelonLoader,",
+                "as it is not their duty.",
+                "",
+                "Report compatibility issues to the",
+                "# BepInEx MelonLoader Loader mod POST PAGE or the",
+                "GitHub ISSUE PAGE.",
+                "",
+            };
+            string[] chinese =
+            {
+                "BepInEx MelonLoader Loader 是一个仍处于早期版本的 mod，",
+                "可能存在兼容性问题。",
+                "",
+                "请不要把因使用本 mod 导致的兼容性问题",
+                "提交给 MelonLoader 下的 mod 开发者，",
+                "这不是他们的职责。",
+                "",
+                "请把兼容性问题提交到 # BepInEx MelonLoader Loader 的",
+                "发布页或 GitHub Issue 页。",
+                "",
             };
 
             // Plain-text copy for the BepInEx log file.
             var sb = new System.Text.StringBuilder();
-            sb.Append('+').Append(new string('-', width)).Append('+').AppendLine();
-            foreach (var t in texts)
-                sb.Append("| ").Append(t.PadRight(width - 1)).Append('|').AppendLine();
-            sb.Append('+').Append(new string('-', width)).Append('+');
+            sb.Append('+').Append(new string('-', width + 2)).Append('+').AppendLine();
+            foreach (var t in english) sb.Append(RenderBoxLine(t, width)).AppendLine();
+            foreach (var t in chinese) sb.Append(RenderBoxLine(t, width)).AppendLine();
+            sb.Append('+').Append(new string('-', width + 2)).Append('+');
             MelonLogger.Msg(sb.ToString());
 
             // Watermelon-coloured render straight to the native console (green frame, pink
@@ -116,20 +131,34 @@ namespace MelonLoader.Hosting
                 {
                     const ushort brightGreen = 2 | 8;      // FOREGROUND_GREEN | INTENSITY
                     const ushort pink = 1 | 4 | 8;         // FOREGROUND_RED | FOREGROUND_BLUE | INTENSITY
-                    WriteNativeConsole(hOut, "+" + new string('-', width) + "+\n", brightGreen);
-                    foreach (var t in texts)
-                    {
-                        WriteNativeConsole(hOut, "| ", brightGreen);
-                        WriteNativeConsole(hOut, t.PadRight(width - 1), pink);
-                        WriteNativeConsole(hOut, "|\n", brightGreen);
-                    }
-                    WriteNativeConsole(hOut, "+" + new string('-', width) + "+\n", brightGreen);
+                    WriteNativeConsole(hOut, "+" + new string('-', width + 2) + "+\n", brightGreen);
+                    foreach (var t in english) WriteNativeConsole(hOut, RenderBoxLine(t, width) + "\n", pink);
+                    foreach (var t in chinese) WriteNativeConsole(hOut, RenderBoxLine(t, width) + "\n", pink);
+                    WriteNativeConsole(hOut, "+" + new string('-', width + 2) + "+\n", brightGreen);
                 }
             }
             catch
             {
                 // No console (GUI-only) - the BepInEx log copy above is sufficient.
             }
+        }
+
+        // Builds one box row: "| <inner padded to `width` display columns> |". Padding uses
+        // display width so CJK/full-width characters (2 columns each) line up correctly.
+        private static string RenderBoxLine(string inner, int width)
+        {
+            var pad = width - DisplayWidth(inner);
+            if (pad < 0) pad = 0;
+            return "| " + inner + new string(' ', pad) + " |";
+        }
+
+        // Approximate console display width: CJK/full-width chars count as 2 columns.
+        private static int DisplayWidth(string s)
+        {
+            var w = 0;
+            foreach (var c in s)
+                w += c > 0x7E ? 2 : 1;
+            return w;
         }
 
         private const int STD_OUTPUT_HANDLE = -11;
