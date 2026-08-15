@@ -91,9 +91,11 @@ class Build : NukeBuild
 
 	    // Deploy the preloader patcher that maintains the Il2Cpp.* interop aliases BEFORE
 	    // BepInEx loads/memory-maps the interop assemblies (a plugin can never rewrite them).
-    // It carries dnlib.dll alongside it. The patcher builds with the standard Release
-    // configuration (it does not participate in the solution's BepInEx6 config mapping).
-    var patcherOutput = RootDirectory / $"{ProjectName}.Patcher" / "bin" / "Release" / "net6.0";
+	    // It carries dnlib.dll alongside it. The patcher builds with the standard Release
+	    // configuration (it does not participate in the solution's BepInEx6 config mapping).
+	    var patcherOutput = RootDirectory / $"{ProjectName}.Patcher" / "bin" / "Release" / "net6.0";
+	    CopyFileToDirectory(patcherOutput / $"{ProjectName}.Patcher.dll", stagingPatchersPath);
+	    CopyFileToDirectory(patcherOutput / "dnlib.dll", stagingPatchersPath);
 
 	    var stagingMLDependencies = stagingMLPath / "MelonLoader" / "Dependencies";
 
