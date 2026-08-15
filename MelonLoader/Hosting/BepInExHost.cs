@@ -104,16 +104,16 @@ namespace MelonLoader.Hosting
                 if (Has("melonloader.debug")) config.Loader.DebugMode = true;
                 if (Has("melonloader.captureplayerlogs")) config.Loader.CapturePlayerLogs = true;
                 if (int.TryParse(Value("melonloader.harmonyloglevel"), out var hll))
-                    config.Loader.HarmonyLogLevel = (LoaderConfig.CoreConfig.HarmonyLogVerbosity)Math.Clamp(hll,
-                        (int)LoaderConfig.CoreConfig.HarmonyLogVerbosity.None,
+                    config.Loader.HarmonyLogLevel = (LoaderConfig.CoreConfig.HarmonyLogVerbosity)Math.Min(
+                        Math.Max(hll, (int)LoaderConfig.CoreConfig.HarmonyLogVerbosity.None),
                         (int)LoaderConfig.CoreConfig.HarmonyLogVerbosity.IL);
                 if (Has("no-mods")) config.Loader.Disable = true;
                 if (Has("quitfix")) config.Loader.ForceQuit = true;
                 if (Has("melonloader.disablestartscreen")) config.Loader.DisableStartScreen = true;
                 if (Has("melonloader.launchdebugger")) config.Loader.LaunchDebugger = true;
                 if (int.TryParse(Value("melonloader.consolemode"), out var cm))
-                    config.Loader.Theme = (LoaderConfig.CoreConfig.LoaderTheme)Math.Clamp(cm,
-                        (int)LoaderConfig.CoreConfig.LoaderTheme.Normal,
+                    config.Loader.Theme = (LoaderConfig.CoreConfig.LoaderTheme)Math.Min(
+                        Math.Max(cm, (int)LoaderConfig.CoreConfig.LoaderTheme.Normal),
                         (int)LoaderConfig.CoreConfig.LoaderTheme.Lemon);
                 if (Has("melonloader.nosfload")) config.Loader.DisableSubFolderLoad = true;
                 if (Has("melonloader.nosfmanifest")) config.Loader.DisableSubFolderManifest = true;
