@@ -35,6 +35,23 @@ namespace MelonLoader
         /// <param name="coroutineToken">The coroutine to stop</param>
         public static void Stop(object coroutineToken)
         {
+            // BepInEx-hosted compatibility: while the SupportModule was not ready, Start()
+            // returned the raw IEnumerator (managed queue mode - see ProcessQueue). Such
+            // tokens - or a plain null - must be cleaned up from the managed queue, NOT handed
+            // to SupportModule.Interface.StopCoroutine: it casts the token to
+            // UnityEngine.Coroutine and throws NullReferenceException for a non-Coroutine
+            // token (e.g. IronNestFCS FSC.Dispose -> StopCoroutine(routine is null)).
+            if (coroutineToken == null)
+                return;
+
+            if (coroutineToken is IEnumerator managedToken)
+            {
+                _queue.Remove(managedToken);
+                _waitUntil.Remove(managedToken);
+                _stacks.Remove(managedToken);
+                return;
+            }
+
             if (!_hasProcessed
                 || (SupportModule.Interface == null))
             {

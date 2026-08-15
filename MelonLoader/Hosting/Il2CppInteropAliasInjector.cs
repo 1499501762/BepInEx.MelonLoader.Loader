@@ -194,6 +194,20 @@ namespace MelonLoader.Hosting
                     var tmp = origPath + ".aliastmp" + Guid.NewGuid().ToString("N");
                     try
                     {
+                        // Self-heal: strip the obsolete assembly-level [MelonLoaderAliasedInterop]
+                        // marker if present. Its attribute type was removed when the managed
+                        // reflection-filter approach was reverted; a stale marker makes Harmony /
+                        // GetCustomAttributes on the interop throw TypeLoadException
+                        // ("Could not load type 'MelonLoader.Hosting.MelonLoaderAliasedInteropAttribute'").
+                        var asm = m.Assembly;
+                        if (asm != null)
+                        {
+                            for (int i = asm.CustomAttributes.Count - 1; i >= 0; i--)
+                            {
+                                if (asm.CustomAttributes[i].TypeFullName == "MelonLoader.Hosting.MelonLoaderAliasedInteropAttribute")
+                                    asm.CustomAttributes.RemoveAt(i);
+                            }
+                        }
                         m.Write(tmp);
                         // Release the memory-mapped handle BEFORE replacing the original file.
                         // ModuleDefMD.Load keeps the file mapped, and replacing a mapped file

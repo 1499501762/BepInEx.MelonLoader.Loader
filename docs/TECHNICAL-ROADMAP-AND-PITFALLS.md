@@ -94,6 +94,9 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 4. **引擎类型绝不别名**。
 5. **每次功能完成必须真实游戏实测再发布**——理论可行不等于实际可行（v2.3.6 / v2.3.7 都是实测才暴露的）。
 6. 彩色输出走原生 Win32 console，别依赖被重定向的 `Console`。
+7. **回退 interop 相关代码后必须重新生成 interop**：反射钩子方案曾给 interop 打 `[MelonLoaderAliasedInterop]` 程序集级标记（引用 `MelonLoaderAliasedInteropAttribute` 类型）；回退删除该类型后，残留标记使 Harmony/`GetCustomAttributes` 解析属性抛 `TypeLoadException`（几十个 patch 全挂，连锁 FCS 协程异常）。`AliasInjector` 现每次写回自愈清除该属性；已部署环境需删 `.melonloader-aliased` 指纹强制重生成。
+8. **BepInEx 托管下 SupportModule 晚于 mods 初始化**：mods 早期调 `MelonCoroutines.Start` 走 queue 模式返回 **IEnumerator** token，SupportModule 就绪后 `Stop` 走 `SupportModule.Interface.StopCoroutine`（强转 `UnityEngine.Coroutine`）→ 非 Coroutine token 转 null → `StopCoroutine(null)` 抛 NRE。`MelonCoroutines.Stop` 现对 null/IEnumerator 容错（直接清理托管队列）。
+9. **部署前确认无进程持有文件**：在 pwsh 里 `Assembly.LoadFrom` 过 MelonLoader.dll 会长期锁文件（非 collectible ALC），导致后续部署 `Copy-Item` 报"文件被占用"；验证用的 pwsh 进程需关闭。
 
 ## 7. 后续优化路线（候选，尚未实施）
 
