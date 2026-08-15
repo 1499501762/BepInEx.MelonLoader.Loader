@@ -64,9 +64,11 @@ class Build : NukeBuild
     {
 	    var stagingDirectory = OutputDir / "staging";
 	    var stagingBepInExPath = stagingDirectory / "BepInEx" / "plugins"  / ProjectName;
+	    var stagingPatchersPath = stagingDirectory / "BepInEx" / "patchers";
 	    var stagingMLPath = stagingDirectory / "MLLoader";
 
 	    stagingBepInExPath.CreateOrCleanDirectory();
+	    stagingPatchersPath.CreateOrCleanDirectory();
 	    stagingMLPath.CreateOrCleanDirectory();
 
 	    (stagingMLPath / "MelonLoader").CreateDirectory();
@@ -86,6 +88,12 @@ class Build : NukeBuild
 		    DirectoryExistsPolicy.Merge);
 
 	    stagingBepInExPath.GlobFiles("*.pdb", "*Harmony.dll").DeleteFiles();
+
+	    // Deploy the preloader patcher that maintains the Il2Cpp.* interop aliases BEFORE
+	    // BepInEx loads/memory-maps the interop assemblies (a plugin can never rewrite them).
+    // It carries dnlib.dll alongside it. The patcher builds with the standard Release
+    // configuration (it does not participate in the solution's BepInEx6 config mapping).
+    var patcherOutput = RootDirectory / $"{ProjectName}.Patcher" / "bin" / "Release" / "net6.0";
 
 	    var stagingMLDependencies = stagingMLPath / "MelonLoader" / "Dependencies";
 
@@ -122,6 +130,11 @@ class Build : NukeBuild
 	    .DependsOn(DownloadDependencies, Clean)
         .Executes(() =>
 	    {
+			DotNetTasks.DotNetBuild(x =>
+				x.SetProjectFile(RootDirectory / $"{ProjectName}.Patcher" / $"{ProjectName}.Patcher.csproj")
+					.SetFramework("net6.0")
+					.SetConfiguration("Release"));
+
 			HandleBuild("UnityMono", "net35", "BepInEx6", false);
 			HandleBuild("IL2CPP", "net6.0", "BepInEx6", true);
 

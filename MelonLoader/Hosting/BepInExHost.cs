@@ -60,44 +60,13 @@ namespace MelonLoader.Hosting
             BootstrapInterop.InitializeManaged(lib);
 
             // Approach A: mods are loaded verbatim and never rewritten. The game interop
-            // assembly must ship Il2Cpp.* alias types, so ensure they exist (idempotent).
-            // Note: BepInEx preloads interop before plugins run, so a freshly generated
-            // alias interop takes effect on the next game launch (we log a restart hint).
-            TryEnsureInteropAliases(baseDirectory);
+            // assembly must ship Il2Cpp.* alias types. They are maintained by the dedicated
+            // BepInEx preloader patcher (BepInEx.MelonLoader.Loader.Patcher) which runs in
+            // the preloader stage BEFORE BepInEx loads/memory-maps the interop assemblies -
+            // rewriting them here (from a plugin) is impossible because BepInEx already
+            // loaded every interop assembly by the time plugins run (access denied).
 
             Core.Initialize();
-        }
-
-        /// <summary>
-        /// Ensures the BepInEx game interop carries <c>Il2Cpp.*</c> alias types for the
-        /// installed mods (MelonLoader mods reference Il2Cpp-prefixed game types and are
-        /// loaded verbatim). Rewrites the interop assembly, never the mods. Idempotent.
-        /// </summary>
-        private static void TryEnsureInteropAliases(string baseDirectory)
-        {
-#if NET6_0_OR_GREATER
-            try
-            {
-                var gameRoot = Path.GetDirectoryName(baseDirectory);
-                if (string.IsNullOrEmpty(gameRoot))
-                    return;
-                var interopDir = Path.Combine(gameRoot, "BepInEx", "interop");
-                if (!Directory.Exists(interopDir))
-                    return;
-
-                // Full alias pass: every game type of every interop assembly gets an
-                // Il2Cpp-prefixed alias (Il2Cpp.LookAtTarget in Assembly-CSharp,
-                // Il2CppTMPro.TMP_Text in Unity.TextMeshPro, ...). Any mod reference is
-                // covered regardless of which interop assembly the type lives in, so new
-                // mods never need another regeneration. Skipped when already fully aliased.
-                if (Il2CppInteropAliasInjector.EnsureAliases(interopDir))
-                    MelonLogger.Msg("[BepInExHost] Interop aliases installed - restart the game for them to take effect");
-            }
-            catch (Exception ex)
-            {
-                MelonLogger.Warning($"[BepInExHost] Interop alias check failed: {ex.Message}");
-            }
-#endif
         }
 
         /// <summary>

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>MelonLoader.Patcher</RootNamespace>
+    <AssemblyName>BepInEx.MelonLoader.Loader.Patcher</AssemblyName>
+    <Version>2.3.7</Version>
+    <LangVersion>latest</LangVersion>
+    <!-- Copy dnlib.dll (used by the alias injector) next to the patcher so it can be
+         shipped in the BepInEx\patchers folder of the release zip. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.5.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Shared alias injector (same source as the loader's, kept in sync). -->
+    <Compile Include="..\MelonLoader\Hosting\Il2CppInteropAliasInjector.cs" Link="Il2CppInteropAliasInjector.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="BepInEx.Preloader.Core">
+      <HintPath>lib\BepInEx.Preloader.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Core">
+      <HintPath>lib\BepInEx.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SemanticVersioning">
+      <HintPath>lib\SemanticVersioning.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Mono.Cecil">
+      <HintPath>lib\Mono.Cecil.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Mono.Cecil.Rocks">
+      <HintPath>lib\Mono.Cecil.Rocks.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

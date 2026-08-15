@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.7.34031.279
@@ -15,6 +15,8 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BepInEx.MelonLoader.Loader.IL2CPP", "BepInEx.MelonLoader.Loader.IL2CPP\BepInEx.MelonLoader.Loader.IL2CPP.csproj", "{39CE899F-DF83-4678-AB18-89C538F3550B}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "_build", "build\_build.csproj", "{D5A1F37B-33EF-4E84-9E2E-117E4E86CC14}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BepInEx.MelonLoader.Loader.Patcher", "BepInEx.MelonLoader.Loader.Patcher\BepInEx.MelonLoader.Loader.Patcher.csproj", "{7AE59F13-080E-495A-AA23-0AF02D565801}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -101,6 +103,24 @@ Global
 		{D5A1F37B-33EF-4E84-9E2E-117E4E86CC14}.Release|x64.Build.0 = Release|Any CPU
 		{D5A1F37B-33EF-4E84-9E2E-117E4E86CC14}.Release|x86.ActiveCfg = Release|Any CPU
 		{D5A1F37B-33EF-4E84-9E2E-117E4E86CC14}.Release|x86.Build.0 = Release|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.BepInEx6|Any CPU.ActiveCfg = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.BepInEx6|Any CPU.Build.0 = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.BepInEx6|x64.ActiveCfg = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.BepInEx6|x64.Build.0 = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.BepInEx6|x86.ActiveCfg = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.BepInEx6|x86.Build.0 = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Debug|x64.Build.0 = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Debug|x86.Build.0 = Debug|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Release|x64.ActiveCfg = Release|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Release|x64.Build.0 = Release|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Release|x86.ActiveCfg = Release|Any CPU
+		{7AE59F13-080E-495A-AA23-0AF02D565801}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

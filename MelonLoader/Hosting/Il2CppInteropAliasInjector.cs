@@ -24,6 +24,11 @@ namespace MelonLoader.Hosting
     /// </summary>
     public static class Il2CppInteropAliasInjector
     {
+        /// <summary>Optional warning logger assigned by the host (MelonLoader plugin or the
+        /// BepInEx preloader patcher). Defaults to no-op so the injector stays usable in
+        /// both hosting environments without depending on MelonLoader's logger.</summary>
+        public static Action<string> LogWarning = _ => { };
+
         /// <summary>
         /// Ensures every interop assembly under <paramref name="interopDir"/> contains
         /// Il2Cpp-prefixed aliases for <b>all</b> of its game types. A full alias pass
@@ -44,7 +49,7 @@ namespace MelonLoader.Hosting
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[BepInExHost] interop alias injection failed: {ex.Message}");
+                LogWarning($"[InteropAliasInjector] interop alias injection failed: {ex}");
                 return false;
             }
         }
@@ -78,6 +83,38 @@ namespace MelonLoader.Hosting
                     {
                         var m = ModuleDefMD.Load(file);
                         var name = m.Assembly?.Name?.String ?? asmName;
+                        // Skip ENGINE runtime modules outright: when the engine namespaces
+                        // (UnityEngine.* / Unity.* / System.*) dominate the module's top-level
+                        // types, it is an engine runtime assembly (Unity.InputSystem,
+                        // Unity.Services.Core.Device, ...). MelonLoader never prefixes those and
+                        // mods reference them unprefixed - aliasing them generates bogus
+                        // Il2CppUnity.* alias types and cross-assembly references that break the
+                        // writes. Unity plugins such as Unity.TextMeshPro (namespace "TMPro")
+                        // are NOT engine-dominant and still get aliased.
+                        int engineCount = 0, nonEngineCount = 0;
+                        foreach (var t in m.Types)
+                        {
+                            if (t.IsNested) continue;
+                            var n = (string)t.Namespace ?? "";
+                            if (IsEngineNamespace(n)) engineCount++;
+                            else nonEngineCount++;
+                        }
+                        if (nonEngineCount == 0 || nonEngineCount < engineCount)
+                            continue;
+                        // Self-heal: strip any pre-existing Il2Cpp-prefixed alias types (from an
+                        // older on-demand pass or a previous full pass) BEFORE indexing, so a
+                        // regeneration is idempotent and never double-prefixes (Il2Cpp.Il2Cpp.X)
+                        // nor leaves stale aliases that reference original private members.
+                        // Only non-framework modules land here and BepInEx originals never carry an
+                        // Il2Cpp-prefixed namespace, so this only ever strips our own aliases
+                        // (Il2Cpp.*, Il2CppTMPro.*, Il2CppFMOD.*, ... top-level types).
+                        foreach (var t in m.Types.ToList())
+                        {
+                            if (t.IsNested) continue;
+                            var ns = (string)t.Namespace ?? "";
+                            if (ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
+                                m.Types.Remove(t);
+                        }
                         _modulesByAsm[name] = m;
                         foreach (var t in m.GetTypes())
                         {
@@ -92,9 +129,10 @@ namespace MelonLoader.Hosting
                             }
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // skip modules we cannot read
+                        // skip modules we cannot read, but log why (helps diagnose locked files)
+                        LogWarning($"[InteropAliasInjector] cannot load {asmName}: {ex.Message}");
                     }
                 }
             }
@@ -102,7 +140,10 @@ namespace MelonLoader.Hosting
             internal bool Run()
             {
                 if (_modulesByAsm.Count == 0)
+                {
+                    LogWarning($"[InteropAliasInjector] no modules loaded from {_interopDir}");
                     return false;
+                }
 
                 // Fingerprint skip: a full alias pass records the interop fingerprint
                 // (file name/size/timestamp) + marker version. If nothing changed since,
@@ -125,7 +166,7 @@ namespace MelonLoader.Hosting
                 var seeds = new HashSet<string>();
                 foreach (var kv in _modulesByAsm)
                     foreach (var t in kv.Value.Types)
-                        if (!t.IsNested)
+                        if (!t.IsNested && !IsEngineType(t))
                             seeds.Add(Key(kv.Key, t.FullName));
 
                 _collected = new HashSet<string>();
@@ -139,8 +180,12 @@ namespace MelonLoader.Hosting
                 if (_aliasByOrig.Count == 0)
                     return false;
 
-                // Write back each modified module via temp file + move (the module is
-                // memory-mapped from its path, so writing in place would fail).
+                // Write back each modified module via temp file + move. One or two files can
+                // legitimately fail (e.g. a file BepInEx/Unity keeps locked at runtime) - log,
+                // skip it and keep going so the rest of the alias set still lands. Only when
+                // EVERY module was written do we record the fingerprint marker, otherwise we
+                // return false so the next launch retries the incomplete pass.
+                bool allWritten = true;
                 foreach (var m in _dirtyModules)
                 {
                     var origPath = m.Location;
@@ -150,7 +195,18 @@ namespace MelonLoader.Hosting
                     try
                     {
                         m.Write(tmp);
+                        // Release the memory-mapped handle BEFORE replacing the original file.
+                        // ModuleDefMD.Load keeps the file mapped, and replacing a mapped file
+                        // with File.Move throws "Access to the path is denied" even though a
+                        // plain copy-over (content write) succeeds. Disposing frees the handle
+                        // so the original file can be deleted/replaced.
+                        m.Dispose();
                         File.Move(tmp, origPath, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        allWritten = false;
+                        LogWarning($"[InteropAliasInjector] write FAILED for '{Path.GetFileName(origPath)}' (skipped, retry next launch): {ex.Message}");
                     }
                     finally
                     {
@@ -160,14 +216,19 @@ namespace MelonLoader.Hosting
                 }
 
                 // Record the interop fingerprint so subsequent launches skip this pass
-                // until the interop actually changes (e.g. BepInEx regenerates it).
-                try
+                // until the interop actually changes (e.g. BepInEx regenerates it). Only
+                // record when the whole set was written successfully.
+                if (allWritten)
                 {
-                    File.WriteAllText(markerPath, MarkerVersion + "\n" + ComputeFingerprint(_interopDir));
+                    try
+                    {
+                        File.WriteAllText(markerPath, MarkerVersion + "\n" + ComputeFingerprint(_interopDir));
+                    }
+                    catch { }
+                    return true;
                 }
-                catch { }
 
-                return true;
+                return false;
             }
 
             private static string ComputeFingerprint(string interopDir)
@@ -184,6 +245,7 @@ namespace MelonLoader.Hosting
             // ---- closure collection ----
             private void CollectType(TypeDef td)
             {
+                if (IsEngineType(td)) return;
                 var asm = GetTypeAsm(td);
                 if (asm == null) return;
                 var key = Key(asm, td.FullName);
@@ -260,6 +322,8 @@ namespace MelonLoader.Hosting
             // ---- alias creation ----
             private TypeDef EnsureAlias(TypeDef orig)
             {
+                if (IsEngineType(orig))
+                    return orig;
                 var asm = GetTypeAsm(orig);
                 if (asm == null || !_modulesByAsm.TryGetValue(asm, out var mod))
                     return orig;
@@ -409,7 +473,10 @@ namespace MelonLoader.Hosting
                 var declType = m.DeclaringType;
                 // Non-game methods (Il2CppInterop.Runtime, System, UnityEngine, ...) stay as-is,
                 // but map a MethodSpec's generic args so game-type container elements are aliased.
-                if (declType == null || !IsAliasedType(declType))
+                // Game methods on our alias types are re-targeted onto the alias type itself so
+                // the alias's own bodies resolve to its own (public) members - private/internal
+                // members of the original would otherwise throw MethodAccessException.
+                if (declType == null || !IsGameType(declType))
                 {
                     if (m is MethodSpec mspec)
                     {
@@ -481,8 +548,28 @@ namespace MelonLoader.Hosting
                 if (f is FieldDef fd && fd.DeclaringType == null)
                     return f;
                 var declType = f.DeclaringType;
-                if (declType == null || !IsAliasedType(declType))
+                if (declType == null)
                     return f;
+                if (!IsGameType(declType))
+                {
+                    // Non-game declaring type, e.g. Il2CppInterop.Runtime.Il2CppClassPointerStore<T>
+                    // or an engine type. Still re-target generic arguments that are game types:
+                    // the alias .cctor() must write Il2CppClassPointerStore<Il2Cpp.X>::NativeClassPtr
+                    // (NOT <X>) because the mod's GetComponentInChildren<Il2Cpp.X>() reads the
+                    // <Il2Cpp.X> slot - it must be the same initialized slot. Engine decl types
+                    // (UnityEngine.*/Unity.*/System.*) map to themselves and stay untouched.
+                    var mappedDecl = MapType(mod, declType);
+                    if (ReferenceEquals(mappedDecl, declType))
+                        return f;
+                    var nfsX = new FieldSig(MapType(mod, f.FieldSig.Type));
+                    return new MemberRefUser(mod, f.Name, nfsX, mappedDecl);
+                }
+                // Map a field whose declaring type is one of the game interop types we
+                // alias. This is critical: the alias type's .cctor() writes the private
+                // NativeFieldInfoPtr_* fields of ITS OWN alias type (private members are
+                // only accessible from the declaring type). If we left the field pointing
+                // at the ORIGINAL type (private), the alias .cctor would throw
+                // FieldAccessException (e.g. Il2Cpp.CylinderShellSelector..cctor).
                 var decl = MapType(mod, declType);
                 var nfs = new FieldSig(MapType(mod, f.FieldSig.Type));
                 return new MemberRefUser(mod, f.Name, nfs, decl);
@@ -515,13 +602,19 @@ namespace MelonLoader.Hosting
                     if (td.IsNested && td.DeclaringType != null)
                     {
                         if (key != null && _aliasByOrig.TryGetValue(key, out var aliasN))
-                            return aliasN;
+                            return ResolveAlias(mod, aliasN);
                         if (key != null && _origByFull.ContainsKey(key))
-                            return EnsureAlias(td);
+                            return ResolveAlias(mod, EnsureAlias(td));
                         return td;
                     }
                     if (key != null && _aliasByOrig.TryGetValue(key, out var alias))
-                        return alias;
+                        return ResolveAlias(mod, alias);
+                    // Game type not aliased YET (processing order): alias it on the spot so
+                    // method signatures line up (e.g. TMP_Text.get_font must return the alias
+                    // TMP_FontAsset, not the original, or the CLR reports MissingMethodException
+                    // against the mod's Il2Cpp-prefixed MethodRef).
+                    if (key != null && !IsEngineType(td) && _origByFull.ContainsKey(key))
+                        return ResolveAlias(mod, EnsureAlias(td));
                     // Not aliased: keep the original TypeDef reference.
                     return td;
                 }
@@ -532,12 +625,30 @@ namespace MelonLoader.Hosting
                     if (asm != null)
                     {
                         var key = Key(asm, origFull);
+                        // Any game type that HAS an alias resolves to that alias - whether the
+                        // reference is Il2Cpp-prefixed (a mod-style ref) or unprefixed (inside
+                        // another alias type, e.g. the generic argument of
+                        // Il2CppClassPointerStore<CylinderShellSelector> in an alias .cctor,
+                        // which MUST become Il2CppClassPointerStore<Il2Cpp.CylinderShellSelector>
+                        // so the mod's GetComponentInChildren<Il2Cpp.CylinderShellSelector>()
+                        // finds the same initialized native-class pointer).
                         if (_aliasByOrig.TryGetValue(key, out var alias))
-                            return alias;
+                            return ResolveAlias(mod, alias);
+                        // Engine runtime types (UnityEngine.* / System.* namespaces) keep
+                        // pointing at the BepInEx originals - never alias those and never
+                        // rewrite unprefixed refs to them (e.g. ActionOnInput.OnEvent ->
+                        // UnityEngine.InputSystem.InputAction/CallbackContext).
+                        if (IsEngineType(tr))
+                            return tr;
                         if (tr.IsNested && tr.DeclaringType != null)
                         {
                             if (_origByFull.TryGetValue(key, out var td2))
-                                return EnsureAlias(td2);
+                                return ResolveAlias(mod, EnsureAlias(td2));
+                        }
+                        else if (_origByFull.TryGetValue(key, out var td3))
+                        {
+                            // Top-level game type not aliased yet (processing order): alias now.
+                            return ResolveAlias(mod, EnsureAlias(td3));
                         }
                         // Aliased game type not created yet: build an Il2Cpp-prefixed TypeRef
                         // chain pointing at the target assembly (the alias TypeDef will exist
@@ -548,6 +659,31 @@ namespace MelonLoader.Hosting
                     return tr;
                 }
                 return t;
+            }
+
+            // Resolve an alias TypeDef for use inside <paramref name="mod"/>. Same module:
+            // return the TypeDef directly. Different module (a game/plugin assembly referencing
+            // an alias type living in another interop assembly): return a TypeRef pointing at
+            // that assembly's Il2Cpp-prefixed type, otherwise dnlib fails the write with
+            // "TypeDef 'Il2Cpp.X' is not defined in this module" (cross-module TypeDef refs).
+            private ITypeDefOrRef ResolveAlias(ModuleDefMD mod, TypeDef alias)
+            {
+                if (alias == null) return null;
+                if (alias.Module == mod)
+                    return alias;
+                return MakeAliasRef(mod, alias);
+            }
+
+            private TypeRef MakeAliasRef(ModuleDefMD mod, TypeDef alias)
+            {
+                if (alias.DeclaringType != null)
+                {
+                    var parent = MakeAliasRef(mod, alias.DeclaringType);
+                    return new TypeRefUser(mod, string.Empty, alias.Name, parent);
+                }
+                var asmName = alias.Module?.Assembly?.Name?.String;
+                var ns = (string)alias.Namespace ?? "";
+                return new TypeRefUser(mod, ns, alias.Name, GetAssemblyRef(mod, asmName ?? ""));
             }
 
             private ITypeDefOrRef MakeIl2CppRefChain(ModuleDefMD mod, ITypeDefOrRef t, string asm)
@@ -606,6 +742,8 @@ namespace MelonLoader.Hosting
             {
                 if (name == "Il2Cppmscorlib" || name == "mscorlib" || name == "netstandard")
                     return true;
+                if (name == "__Generated")
+                    return true; // BepInEx/Unity runtime-generated helper, always regenerated & locked
                 if (name.StartsWith("Il2CppSystem", StringComparison.Ordinal)) return true;
                 if (name.StartsWith("Il2CppInterop", StringComparison.Ordinal)) return true;
                 if (name.StartsWith("System", StringComparison.Ordinal)) return true;
@@ -650,7 +788,61 @@ namespace MelonLoader.Hosting
                 if (!ns.StartsWith("Il2Cpp", StringComparison.Ordinal))
                     return false;
                 var asm = GetScopeAssembly(tr);
-                return asm != null;
+                // Il2CppInterop.Runtime / Il2CppSystem.* etc. also carry an "Il2Cpp" namespace
+                // prefix but are framework assemblies - never re-target those, keep the ref as-is.
+                if (asm == null || IsFrameworkAssembly(asm))
+                    return false;
+                return true;
+            }
+
+            // Engine runtime types whose namespace already starts with UnityEngine.* or System.*.
+            // MelonLoader never Il2Cpp-prefixes those - mods reference them UNPREFIXED and
+            // BepInEx's interop already provides them, so they must NOT be aliased. This matters
+            // for assemblies like Unity.InputSystem.dll whose types live under
+            // "UnityEngine.InputSystem.*" (aliasing them would rewrite unprefixed cross-assembly
+            // references like ActionOnInput.OnEvent -> UnityEngine.InputSystem.InputAction and
+            // break them). Unity plugins such as Unity.TextMeshPro (namespace "TMPro") are NOT
+            // engine types and still get aliased (Il2CppTMPro).
+            private static bool IsEngineType(ITypeDefOrRef t)
+            {
+                var ns = (string)t.Namespace ?? "";
+                return IsEngineNamespace(ns);
+            }
+
+            // Engine namespaces: UnityEngine.*, Unity.* (Unity.Services.*, Unity.XR.*,
+            // Unity.Collections.*, Unity.Mathematics.*, ...) and System.*. MelonLoader never
+            // Il2Cpp-prefixes types under these - mods reference them UNPREFIXED and BepInEx's
+            // interop already provides them, so they must NOT be aliased. Unity plugins such as
+            // Unity.TextMeshPro (namespace "TMPro") are NOT engine namespaces and still get
+            // aliased (Il2CppTMPro).
+            private static bool IsEngineNamespace(string ns)
+            {
+                return ns.StartsWith("UnityEngine", StringComparison.Ordinal)
+                    || ns.StartsWith("Unity.", StringComparison.Ordinal)
+                    || ns.StartsWith("System", StringComparison.Ordinal);
+            }
+
+            // True when the type lives in one of the game interop modules we alias (i.e. it is
+            // an original game type that will get an Il2Cpp-prefixed alias). Used to decide
+            // whether member references on it must be re-targeted onto the alias type. Note the
+            // original game type's namespace is usually EMPTY (Assembly-CSharp top-level) or
+            // non-Il2Cpp (e.g. Unity.TextMeshPro), so IsAliasedType() (namespace prefix check)
+            // is NOT the right test here - presence in _origByFull is.
+            private bool IsGameType(ITypeDefOrRef t)
+            {
+                if (t == null) return false;
+                if (IsEngineType(t)) return false;
+                if (t is TypeSpec ts)
+                {
+                    var sig = ts.TypeSig;
+                    if (sig is ClassOrValueTypeSig covt) return IsGameType(covt.TypeDefOrRef);
+                    if (sig is GenericInstSig gis && gis.GenericType != null) return IsGameType(gis.GenericType.TypeDefOrRef);
+                    return false;
+                }
+                var asm = GetTypeAsm(t);
+                if (asm == null || !_modulesByAsm.ContainsKey(asm))
+                    return false;
+                return _origByFull.ContainsKey(Key(asm, ToOrigFullName(t)));
             }
 
             private static AssemblyRef GetAssemblyRef(ModuleDefMD mod, string asmName)
