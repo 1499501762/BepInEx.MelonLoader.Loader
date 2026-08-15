@@ -123,10 +123,13 @@ MelonLoader mods 引用 `Il2Cpp.*` / `Il2CppTMPro.*` 前缀类型，BepInEx inte
 ### 7.4 补全环境模拟 — ✅ 可行（低风险）
 复刻 MLL 的环境变量、AppContext 开关、目录结构、日志格式、配置文件路径，让 mod 读取运行环境时无感知差异。
 
-### 7.5 mod 兼容性自检 — ✅ 高价值
-启动时扫描 mod 程序集，识别对未实现底层 API 的调用，主动打印明确警告（"此 mod 依赖原生 MLL 能力，桥接下可能异常"），从源头减少无效 issue。
+### 7.5 mod 兼容性自检 — ✅ 已实施（2026-08-16）
+启动时（mods 加载前）用 **dnlib 静态扫描** mod 程序集的 IL 调用，识别对桥接下未实现/空操作 API（`MelonUtils.NativeHookAttach/Detach`、`Imports.Hook/Unhook`）的引用，打印 `[CompatScan]` Warning 警告（"此 mod 依赖原生 MLL 能力，桥接下可能异常，请反馈给加载器作者而不是 mod 作者"），从源头减少无效 issue。
+- 实现：`MelonLoader/Hosting/ModCompatScanner.cs`（net6.0/IL2CPP），挂在 `Core.Start` 的 `LoadMelons` 之前；dnlib 元数据只读，不加载、不改写 mod（Approach A 安全），扫描后 `Dispose` 释放文件锁。
+- 关键选型：**dnlib 静态扫描而非运行时反射**——因为 BepInEx 6 interop 的托管 `GetTypes()` 抛 `ReflectionTypeLoadException`（见 7.1 实测），运行时枚举 interop 不可靠；dnlib 直接读 IL operand 的 `MemberRef`/`MethodSpec`，可靠且零加载副作用。
+- 真实验证：正常扫描 2 个 mod 程序集 0 警告；注入调用 `NativeHookAttach` 的测试 dll 后正确打出 `[Warning]` 级 `[CompatScan]` 警告（含 API 全名 + 原因 + 引导文案），删除测试 dll 后恢复 0 警告；游戏零错误。
 
-**结论**：7.2–7.5 均可排期实施；7.1 因 `TypeForwardedTo` 语义限制不可行，保持现有复制方案。
+**结论**：7.2–7.4 待排期实施；7.1 因 `TypeForwardedTo` 语义限制不可行（反射钩子替代也已实测否决），保持现有复制方案；7.5 已完成。
 
 ## 8. 相关文件
 

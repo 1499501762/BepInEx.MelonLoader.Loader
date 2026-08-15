@@ -217,6 +217,13 @@ namespace MelonLoader
                 return false;
                 
             MelonEvents.OnPreModsLoaded.Invoke();
+#if NET6_0_OR_GREATER
+            // Compatibility self-check (roadmap 7.5): warn before mods load if a mod calls
+            // native-MelonLoader APIs that are no-ops/unavailable under the BepInEx bridge, so
+            // invalid issues are avoided at the source. Static dnlib scan only - never loads or
+            // rewrites the mod.
+            Hosting.ModCompatScanner.Scan(MelonLoader.Utils.MelonEnvironment.ModsDirectory);
+#endif
             MelonFolderHandler.LoadMelons(MelonFolderHandler.ScanType.Mods);
 
             MelonEvents.OnPreSupportModule.Invoke();
