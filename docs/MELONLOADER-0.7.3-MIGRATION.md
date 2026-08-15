@@ -3,6 +3,21 @@
 > 状态：**全部完成**（核心移植、BepInEx 托管、宿主插件、构建打包、真实游戏完整验证）
 > 日期：2026-08-09
 
+## v2.3.8：别名必须在 Patcher 构造函数（而非 Initialize）中写入（2026-08-15）
+
+**真实游戏再次暴露缺陷**：v2.3.7 的 patcher 在 `Initialize()` 里改写 interop，但 BepInEx 6 IL2CPP 的 preloader 时序是：
+```
+Il2CppInteropManager.Initialize()          // 生成 interop 文件、启动运行时
+AddPatchersFromDirectory(...)              // Activator.CreateInstance → patcher 构造函数在此执行
+LoadAssemblyDirectories(interop)           // Mono.Cecil ReadAssembly（InMemory=false）锁定所有 interop 文件
+PatchAndLoad()                             // 调用 patcher.Initialize() → interop 已被锁 = Access denied
+```
+所以 `Initialize()` 里写回**必然失败**（44 个文件 Access denied，interop 无别名，mods 无法加载 → 0 Mods loaded）。
+
+**修复**：把 `EnsureAliases()` 移入**构造函数**——它在 `AddPatchersFromDirectory` 时执行，早于 `LoadAssemblyDirectories`（Cecil 锁定 interop），且 BepInEx 后续的 Cecil 会读取**我们改写后的别名文件**并加载，别名**本次启动即生效**。同时修正误导日志（区分 up to date 与写失败）。
+
+**验证**（Iron Nest，全新未别名 interop）：`interop aliases (re)generated`、无写失败、IronNestFCS v1.2.7 + CustomRecords v1.0.3 正常加载、零错误。
+
 ## v2.3.7：Interop 别名治本（BepInEx 6 Preloader Patcher，2026-08-15）
 
 **背景**：MelonLoader mods 引用 `Il2Cpp.*` 前缀类型（`Il2Cpp.LookAtTarget`、`Il2CppTMPro.TMP_Text`、`Il2Cpp.CylinderShellSelector`），BepInEx interop 用原始命名空间。Approach A 要求 mods **verbatim 加载、绝不 rewrite**，因此在 BepInEx interop 中生成别名。
