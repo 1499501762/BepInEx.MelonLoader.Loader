@@ -49,7 +49,7 @@ namespace MelonLoader.Hosting
             // into LoaderConfig (LoaderConfig.Initialize/CoreConfig.Initialize are BOOTSTRAP-only
             // and never ran under BepInEx hosting). Re-apply the flags here so launch options
             // behave identically for mods.
-            ApplyLaunchArguments(config);
+            ApplyLaunchArguments(config, Environment.GetCommandLineArgs());
 
             // Install a managed BootstrapLibrary backed by BepInEx.
             var lib = new BootstrapLibrary();
@@ -82,12 +82,14 @@ namespace MelonLoader.Hosting
         /// config. The original bootstrap does this in LoaderConfig.CoreConfig.Initialize
         /// (BOOTSTRAP-only), which the BepInEx host never runs, so the flags are re-applied
         /// here to keep launch-option behaviour identical for mods (roadmap 7.4).
+        /// <paramref name="args"/> is injected so the logic can be verified independently
+        /// (the Iron Nest game exits on any command-line arg, so it cannot be exercised by
+        /// passing args to the game process).
         /// </summary>
-        private static void ApplyLaunchArguments(LoaderConfig config)
+        internal static void ApplyLaunchArguments(LoaderConfig config, string[] args)
         {
             try
             {
-                var args = Environment.GetCommandLineArgs();
                 bool Has(string name) =>
                     Array.IndexOf(args, "--" + name) >= 0 || Array.IndexOf(args, name) >= 0;
                 string Value(string name)

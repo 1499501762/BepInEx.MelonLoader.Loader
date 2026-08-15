@@ -126,7 +126,7 @@ MLL 的 `MelonUtils.NativeHookAttach` 原本在 BepInEx 托管下是空操作（
 ### 7.4 补全环境模拟 — ✅ 已实施（2026-08-16）
 - **启动参数**：原生 MLL 的 `LoaderConfig.Initialize/CoreConfig.Initialize` 是 BOOTSTRAP-only，BepInEx 托管下从未运行 → `--melonloader.*` 参数不生效。已在 `BepInExHost` 新增 `ApplyLaunchArguments`（读 `Environment.GetCommandLineArgs()`）补全 `--melonloader.debug/captureplayerlogs/harmonyloglevel/consolemode/nosfload/nosfmanifest/hostfxr` 与 `--no-mods/--quitfix` 的解析。
 - 环境变量 `IL2CPP_INTEROP_DATABASES_LOCATION` 已设（Core.cs）；`MelonEnvironment` 目录结构完整；`PATH`/`NO_COLOR`/`TEMP` 通用。
-- **验证限制**：Iron Nest 游戏对任何命令行参数敏感（直接 exe+参数启动会在 BepInEx 早期退出，LogOutput 为空），故该游戏无法端到端验证参数生效；无参数基线启动正常（无回归），解析逻辑简单可审查。
+- **验证**：Iron Nest 游戏对任何命令行参数敏感（直接 exe+参数启动会在 BepInEx 早期退出，LogOutput 为空），无法端到端传参；故把 `ApplyLaunchArguments` 重构为可注入 args 的 `internal` 方法，用**反射独立验证**解析逻辑：传 `--melonloader.debug --no-mods --melonloader.harmonyloglevel 4 --melonloader.consolemode 1 --melonloader.nosfload` → `DebugMode/Disable/NoSFLoad=True`、`HarmonyLogLevel=Debug`、`Theme` 变更；仅传 `--foo` → 全部保持默认。无参数基线启动正常（无回归）。
 
 ### 7.5 mod 兼容性自检 — ✅ 已实施（2026-08-16）
 启动时（mods 加载前）用 **dnlib 静态扫描** mod 程序集的 IL 调用，识别对桥接下未实现/空操作 API（`MelonUtils.NativeHookAttach/Detach`、`Imports.Hook/Unhook`）的引用，打印英文 `[CompatScan]` Warning 警告（注明依赖原生 MLL 能力、并引导反馈到 **BepInEx MelonLoader Loader 分叉版** `https://github.com/1499501762/BepInEx.MelonLoader.Loader` 而非 mod 作者），从源头减少无效 issue。
