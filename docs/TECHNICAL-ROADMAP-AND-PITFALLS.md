@@ -139,12 +139,17 @@ MLL 的 `MelonUtils.NativeHookAttach` 原本在 BepInEx 托管下是空操作（
 
 **结论**：7.1 因 `TypeForwardedTo` 语义限制不可行（反射钩子替代也已实测否决）；**7.2–7.5 已全部实施**。
 
-### 7.6 别名类型实例方法编译期调用失效（2026-08-16 实测，未修复）
-**现象**：IronNestFreecam 调用 `Il2Cpp.FreeCameraController::SetFreeCamActive`（别名类型实例方法）——mod 编译期 `callvirt` **无效**（rig 不激活、画面不切），但**反射调用同一方法有效**（rig `False→True`）。
-**铁证**：方法指针字段有效（`0x...DADF0`）；ONCE-EXP 反射调用 `rigActive False->True`；mod 按 F5 后 rigActive 恒 `False`。
-**根因**：复制 TypeDef 生成的别名类型被 IL2CPP 当作 interop 类型（`.cctor` 关联 `Il2CppClassPointerStore`），但**其 vtable 未正确建立** → 实例方法编译期 `callvirt` 走错误的 vtable dispatch → **静默失效**（不执行 IL 方法体里的 `il2cpp_runtime_invoke`）。反射调用走托管 IL 方法体（显式方法指针）→ 有效。
-**影响范围**：IronNestFCS 也调用别名实例方法（`LookAtTarget.OnClickDown/OnClickUp` 等）——同样可能失效，但 FCS 核心靠 Harmony patch + 字段操作，不依赖这些调用生效，故"看似正常"；IronNestFreecam **完全依赖** `SetFreeCamActive` 一个调用 → 暴露。**任何依赖别名类型实例方法编译期调用的 mod 都可能受影响。**
-**修复方向（未实施，风险高）**：让别名类型**不被 IL2CPP 识别为 interop 类型**（例如不继承 `Il2CppObjectBase`、按普通类型编译）→ 编译期 `callvirt` 就会执行 IL 方法体（含 `il2cpp_runtime_invoke`）→ 有效。但需保持 `FindObjectOfType`/`GetComponent<Il2Cpp.X>` 的 class pointer 查找能力，且可能影响现有 mod——需谨慎设计并在真实游戏验证。
+### 7.6 OnUpdate 双驱动导致帧边沿输入被消费两次（2026-08-16 实测，已修复）
+**现象**：IronNestFreecam 按 F5 后自由相机不激活（rig 不保持激活、画面不切），但在原生 MelonLoader 下正常。FCS 等其他 mod 看似正常。
+**诊断过程（排除法）**：最初怀疑"别名类型实例方法编译期调用失效"，但实测排除了全部候选：
+- 手动 `il2cpp_runtime_invoke`（`mptr`/`thisPtr`/`(true,true)`）→ **有效**（rig `False→True`）；
+- 反射 `MethodInfo.Invoke` 走方法体 → **有效**；DynamicMethod `callvirt`（任意 owner 程序集上下文）→ **有效**；
+- 重写 mod 绑**原始类型**（`Il2CppInteropModRewriter` 去 `Il2Cpp` 前缀）→ **仍无效**；重写 `callvirt→call` → **仍无效**。
+- 方法指针字段（`NativeMethodInfoPtr_*`）、`Il2CppClassPointerStore` 的 `NativeClassPtr`、实例 `Pointer` 与原始类型**全部相同**，`Module.ResolveMethod` 确认 mod 与诊断拿到的是**同一个 `MethodInfo`**。
+**铁证**：Harmony postfix 证明 **mod 调用本身有效**——`PRE a0=True` → `POST rigActive=True`（激活），但**同帧紧接着第二次调用** `PRE a0=False` → `POST rigActive=False`（关闭）。`OnUpdate` 调用频率实测 **86–176 次/秒**（游戏 ~60fps，应为 ~60）。
+**根因**：MLL 的 `MelonEvents.OnUpdate` **每帧被双驱动**——BepInEx 插件 `GameLoopDriver.Update` 与原生 SupportModule `SupportModule_From.Update` **都**调用 `MelonEvents.OnUpdate.Invoke()`。mod 的 `OnUpdate`（检测 InputSystem `ButtonControl.wasPressedThisFrame`）因此同一帧被调用两次，一次按键触发 `ToggleFreeCam` 两次（`_active` 翻转两次 `false→true→false`）→ 先 `SetFreeCamActive(true)` 开 rig 又立即 `SetFreeCamActive(false)` 关闭 → rig 静默不激活。原生 MLL 每帧只驱动一次，故正常；DynamicMethod 等诊断只调用一次，故 rig 保持激活。
+**修复（已实施）**：`SupportModule_From.Update` 不再调用 `MelonEvents.OnUpdate.Invoke()`——BepInEx 托管下 `OnUpdate` 由插件 `GameLoopDriver` 唯一驱动（`FixedUpdate`/`LateUpdate`/场景事件/`OnApplicationLateStart` 仍由 SupportModule 驱动）。修复后 `OnUpdate` 频率降为 **47–105 次/秒**（=游戏帧率），IronNestFreecam 按 F5 恢复正常。
+**教训**：诊断"mod 调用无效"前，务必先观察**调用后立即**的状态（Harmony postfix），并核对事件投递频率（`OnUpdate`/`OnFixedUpdate` 是否被多个驱动源重复触发）。双驱动会静默破坏所有依赖帧边沿输入（`wasPressedThisFrame`/`GetKeyDown`）的 mod，症状与"interop 调用失效"高度相似。
 
 ## 8. 相关文件
 

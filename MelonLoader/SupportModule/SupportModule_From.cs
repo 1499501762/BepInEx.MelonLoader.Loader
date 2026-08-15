@@ -33,12 +33,12 @@
 
         public void Update()
         {
-            if (!_updateSeen)
-            {
-                _updateSeen = true;
-                LogEventOnce(nameof(Update));
-            }
-            MelonEvents.OnUpdate.Invoke();
+            // BepInEx hosting drives MelonEvents.OnUpdate via the plugin's GameLoopDriver.
+            // The native SupportModule must NOT also drive it: doing so fires OnUpdate several
+            // times per frame, and mods that consume frame-edge input (e.g. InputSystem
+            // wasPressedThisFrame) end up toggling multiple times per key press - the
+            // IronNestFreecam rig is opened then immediately closed. FixedUpdate/LateUpdate
+            // and the scene/late-start events remain SupportModule-driven.
         }
 
         public void FixedUpdate()
